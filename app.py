@@ -23,13 +23,13 @@ app = Flask(__name__)
 
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_NAME = os.getenv('DB_NAME', 'topicos_2')
-DB_USER = os.getenv('DB_USER', 'postgres')
+DB_USER = os.getenv('DB_USER', 'topicos_2_user')
 DB_PASS = os.getenv('DB_PASS', 'postgres')
 DB_PORT = os.getenv('DB_PORT', '5432')
 
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '+18585441954')
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -83,7 +83,7 @@ def get_or_create_client(phone_number, name=None):
         cursor.close()
         conn.close()
 
-def get_or_create_conversation():
+def get_or_create_conversation(client_id):
     """Crear una nueva conversación o obtener la activa para hoy"""
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -405,4 +405,4 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5050, debug=True)
