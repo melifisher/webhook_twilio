@@ -247,6 +247,8 @@ def send_message():
         
         # Enviar el mensaje
         twilio_message = client.messages.create(**message_params)
+        logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
+        logger.info(twilio_message.sid)
         
         # Almacenar el mensaje enviado en la base de datos
         message_type = 'media' if media_url else 'text'
