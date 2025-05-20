@@ -3,13 +3,19 @@ import psycopg2
 import psycopg2.extras
 import requests
 from datetime import datetime
+import logging
+import json
+import os
+import openai
 from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
-import logging
-import json
 import urllib.parse
-import os
+
+load_dotenv()
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+openai.api_key = OPENAI_API_KEY
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,21 +23,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-app = Flask(__name__)
-
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_NAME = os.getenv('DB_NAME', 'topicos_2')
-DB_USER = os.getenv('DB_USER', 'topicos_2_user')
+DB_USER = os.getenv('DB_USER', 'postgres')
 DB_PASS = os.getenv('DB_PASS', 'postgres')
 DB_PORT = os.getenv('DB_PORT', '5432')
 
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '+18585441954')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+app = Flask(__name__)
 
 def get_db_connection():
     """Conexión a la base de datos PostgreSQL"""
@@ -47,6 +51,199 @@ def get_db_connection():
     except Exception as e:
         logger.error(f"Error de conexión a la base de datos: {e}")
         raise
+
+def get_product_categories_promos():
+    """Obtener los productos, categorías y promociones"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        # Obtener productos
+        cursor.execute("SELECT id, nombre, descripcion FROM producto WHERE activo = TRUE")
+        productos = [dict(row) for row in cursor.fetchall()]
+        
+        # Obtener categorías
+        cursor.execute("SELECT id, nombre, descripcion FROM categoria")
+        categorias = [dict(row) for row in cursor.fetchall()]
+        
+        # Obtener promociones activas
+        today = datetime.now().date()
+        cursor.execute("""
+            SELECT id, nombre, descripcion 
+            FROM promocion 
+            WHERE fecha_inicio <= %s AND fecha_fin >= %s
+            """, (today, today))
+        promociones = [dict(row) for row in cursor.fetchall()]
+        
+        return {
+            'productos': productos,
+            'categorias': categorias,
+            'promociones': promociones
+        }
+    except Exception as e:
+        logger.error(f"Error al obtener datos para análisis: {e}")
+        return {'productos': [], 'categorias': [], 'promociones': []}
+    finally:
+        cursor.close()
+        conn.close()
+
+def analyze_intent(message_text, catalog_data):
+    """
+    Analiza el mensaje del cliente para detectar intenciones de interés
+    utilizando la API de OpenAI
+    """
+    try:
+        if not message_text or message_text.strip() == "":
+            return []
+        
+        productos_str = "\n".join([f"ID: {p['id']}, Nombre: {p['nombre']}, Descripción: {p['descripcion']}" 
+                                 for p in catalog_data['productos']])
+        categorias_str = "\n".join([f"ID: {c['id']}, Nombre: {c['nombre']}, Descripción: {c['descripcion']}" 
+                                  for c in catalog_data['categorias']])
+        promociones_str = "\n".join([f"ID: {p['id']}, Nombre: {p['nombre']}, Descripción: {p['descripcion']}" 
+                                   for p in catalog_data['promociones']])
+        
+        # Preparar el prompt para OpenAI
+        prompt = f"""
+        Analiza el siguiente mensaje de un cliente para detectar intenciones de interés en productos, categorías o promociones.
+        
+        Mensaje del cliente: "{message_text}"
+        
+        Catálogo de productos:
+        {productos_str}
+        
+        Categorías disponibles:
+        {categorias_str}
+        
+        Promociones activas:
+        {promociones_str}
+        
+        Responde con un JSON que contenga un array de intereses detectados, donde cada interés debe incluir:
+        1. tipo_interes: "producto", "categoria" o "promocion"
+        2. entidad_id: el ID numérico de la entidad (producto, categoría o promoción)
+        3. nivel_interes: un valor entre 0 y 1 que indique el nivel de confianza en el interés (0 = no hay interés, 1 = interés confirmado)
+        
+        Si no se detecta interés, devuelve un array vacío.
+        Ejemplo de formato de respuesta:
+        {{"intereses": [
+            {{"tipo_interes": "producto", "entidad_id": 5, "nivel_interes": 0.9}},
+            {{"tipo_interes": "categoria", "entidad_id": 2, "nivel_interes": 0.7}}
+        ]}}
+        
+        Solo responde con el objeto JSON, sin texto adicional.
+        """
+        
+        # Llamada a la API de OpenAI
+        response = openai.chat.completions.create(
+            model="gpt-4o",  # o el modelo que prefieras
+            messages=[
+                {"role": "system", "content": "Eres un sistema de análisis de intenciones para un e-commerce."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        
+        # Extraer y procesar la respuesta
+        result_text = response.choices[0].message.content.strip()
+        
+        # Intentar extraer solo el JSON si está rodeado de texto
+        try:
+            # Buscar el JSON en la respuesta
+            import re
+            json_match = re.search(r'({[\s\S]*})', result_text)
+            if json_match:
+                result_text = json_match.group(1)
+            
+            result = json.loads(result_text)
+            
+            # Verificar si el resultado tiene el formato esperado
+            if 'intereses' not in result:
+                # Si devuelve un formato diferente pero parece válido, intentamos adaptarlo
+                if isinstance(result, list):
+                    return result
+                else:
+                    # Intentar extraer intereses si están en la raíz del objeto
+                    return result.get('intereses', [])
+            
+            return result['intereses']
+        except json.JSONDecodeError as e:
+            logger.error(f"Error al decodificar JSON de OpenAI: {e}, respuesta: {result_text}")
+            return []
+    
+    except Exception as e:
+        logger.error(f"Error en análisis de intenciones: {e}")
+        return []
+
+def store_intent(mensaje_id, cliente_id, intereses_detectados):
+    """Almacena los intereses detectados en la base de datos"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        for interes in intereses_detectados:
+            tipo_interes = interes.get('tipo_interes')
+            entidad_id = interes.get('entidad_id')
+            nivel_interes = interes.get('nivel_interes', 0.5)
+            
+            # Validar datos
+            if not tipo_interes or not entidad_id:
+                logger.warning(f"Datos de interés incompletos: {interes}")
+                continue
+                
+            # Preparar la inserción según el tipo de interés
+            producto_id = entidad_id if tipo_interes == 'producto' else None
+            categoria_id = entidad_id if tipo_interes == 'categoria' else None
+            promocion_id = entidad_id if tipo_interes == 'promocion' else None
+            
+            # Insertar en la tabla interes
+            cursor.execute("""
+                INSERT INTO interes 
+                (cliente_id, mensaje_id, producto_id, categoria_id, promocion_id, nivel_interes)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+            """, (cliente_id, mensaje_id, producto_id, categoria_id, promocion_id, nivel_interes))
+            
+            result = cursor.fetchone()
+            if result:
+                logger.info(f"Interés almacenado con ID: {result[0]}")
+            else:
+                logger.info("No se insertó el interés (posible duplicado)")
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error al almacenar interés: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+def process_message_intent(mensaje_id, message_text, cliente_id):
+    """Procesa un mensaje para análisis de intenciones y almacena los resultados"""
+    try:
+        # Obtener datos del catálogo
+        catalog_data = get_product_categories_promos()
+        
+        # Analizar intenciones
+        intereses_detectados = analyze_intent(message_text, catalog_data)
+        
+        if intereses_detectados:
+            logger.info(f"Intereses detectados para mensaje {mensaje_id}: {intereses_detectados}")
+            
+            # Almacenar intereses
+            if store_intent(mensaje_id, cliente_id, intereses_detectados):
+                return {"success": True, "intereses": intereses_detectados}
+            else:
+                return {"success": False, "error": "Error al almacenar intereses"}
+        else:
+            logger.info(f"No se detectaron intereses para mensaje {mensaje_id}")
+            return {"success": True, "intereses": []}
+    
+    except Exception as e:
+        logger.error(f"Error en process_message_intent: {e}")
+        return {"success": False, "error": str(e)}
 
 def get_or_create_client(phone_number, name=None):
     """Obtener cliente por número de teléfono o crear si no existe"""
@@ -91,7 +288,6 @@ def get_or_create_conversation(client_id):
     try:
         today = datetime.now().date()
         
-        # Intentar encontrar una conversación para hoy
         cursor.execute("SELECT * FROM conversacion WHERE fecha = %s AND cliente_id = %s", (today, client_id))
         conversation = cursor.fetchone()
         
@@ -116,8 +312,7 @@ def get_or_create_conversation(client_id):
         cursor.close()
         conn.close()
 
-
-def store_message(conversation_id, message_type, content_text=None, 
+def store_message(conversation_id, is_bot=False, message_type, content_text=None, 
                  media_url=None, media_mimetype=None, media_filename=None):
     """Almacenar un mensaje en la base de datos"""
     conn = get_db_connection()
@@ -126,11 +321,11 @@ def store_message(conversation_id, message_type, content_text=None,
     try:
         cursor.execute("""
             INSERT INTO mensaje 
-            (tipo, contenido_texto, media_url, media_mimetype, media_filename, conversacion_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (tipo, contenido_texto, media_url, media_mimetype, media_filename, conversacion_id, isbot)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (message_type, content_text, media_url, media_mimetype, 
-              media_filename, conversation_id))
+              media_filename, conversation_id, is_bot))
         
         message_id = cursor.fetchone()[0]
         conn.commit()
@@ -156,12 +351,13 @@ def download_media(media_url):
         logger.error(f"Error al descargar medios: {media_response.status_code}")
         return None
 
+
+
 ############ ENDPOINTS ############
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Manejar mensajes entrantes de WhatsApp desde Twilio"""
     try:
-        # Extraer detalles del mensaje
         incoming_msg = request.form.get('Body', '')
         wa_id = request.form.get('From', '').replace('whatsapp:', '')
         
@@ -174,17 +370,18 @@ def webhook():
         # Verificar si hay medios
         num_media = int(request.form.get('NumMedia', '0'))
         
+        # Almacenar mensaje
         if num_media > 0:
             # Manejar mensaje con medios
             for i in range(num_media):
                 media_url = request.form.get(f'MediaUrl{i}')
                 media_type = request.form.get(f'MediaContentType{i}')
                 
-                # Extraer nombre de archivo del encabezado content-disposition o usar uno predeterminado
+                # Extraer nombre de archivo o usar uno predeterminado
                 media_filename = f"media_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                 
                 # Almacenar mensaje con medios
-                store_message(
+                mensaje_id = store_message(
                     conversation_id=conversation_id,
                     message_type='media',
                     content_text=incoming_msg if incoming_msg else None,
@@ -194,13 +391,17 @@ def webhook():
                 )
         else:
             # Almacenar mensaje de texto
-            store_message(
+            mensaje_id = store_message(
                 conversation_id=conversation_id,
                 message_type='text',
                 content_text=incoming_msg
             )
         
-        # Crear una respuesta (opcional)
+        #analizando 
+        if incoming_msg:
+            process_message_intent(mensaje_id, incoming_msg, client_id)
+        
+        # Crear una respuesta
         resp = MessagingResponse()
         resp.message("Mensaje recibido, gracias!")
         
@@ -208,6 +409,174 @@ def webhook():
     
     except Exception as e:
         logger.error(f"Error en webhook: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/analyze_message_intent', methods=['POST'])
+def analyze_message_intent():
+    """Analiza las intenciones de un mensaje existente"""
+    try:
+        data = request.json
+        mensaje_id = data.get('mensaje_id')
+        
+        if not mensaje_id:
+            return jsonify({"error": "Se requiere ID de mensaje"}), 400
+        
+        # Obtener el mensaje y el cliente asociado
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        cursor.execute("""
+            SELECT m.id, m.contenido_texto, c.cliente_id
+            FROM mensaje m
+            JOIN conversacion c ON m.conversacion_id = c.id
+            WHERE m.id = %s
+        """, (mensaje_id,))
+        
+        message = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not message:
+            return jsonify({"error": "Mensaje no encontrado"}), 404
+        
+        # Procesar intenciones
+        result = process_message_intent(
+            mensaje_id=mensaje_id,
+            message_text=message['contenido_texto'],
+            cliente_id=message['cliente_id']
+        )
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        logger.error(f"Error en analyze_message_intent: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/analyze_client_intent', methods=['POST'])
+def analyze_client_intent():
+    """Analiza las intenciones de todas las conversaciones de un cliente"""
+    try:
+        data = request.json
+        cliente_id = data.get('cliente_id')
+        
+        if not cliente_id:
+            return jsonify({"error": "Se requiere ID de cliente"}), 400
+        
+        # Obtener mensajes del cliente que no han sido analizados
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        cursor.execute("""
+            SELECT m.id, m.contenido_texto
+            FROM mensaje m
+            JOIN conversacion c ON m.conversacion_id = c.id
+            WHERE c.cliente_id = %s
+            AND m.isbot = FALSE
+            AND m.contenido_texto IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM interes i WHERE i.mensaje_id = m.id
+            )
+        """, (cliente_id,))
+        
+        messages = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        if not messages:
+            return jsonify({"message": "No hay mensajes nuevos para analizar"}), 200
+        
+        # Analizar cada mensaje
+        results = []
+        for message in messages:
+            result = process_message_intent(
+                mensaje_id=message['id'],
+                message_text=message['contenido_texto'],
+                cliente_id=cliente_id
+            )
+            results.append({
+                "mensaje_id": message['id'],
+                "result": result
+            })
+        
+        return jsonify({
+            "success": True,
+            "messages_analyzed": len(results),
+            "results": results
+        })
+    
+    except Exception as e:
+        logger.error(f"Error en analyze_client_intent: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/get_client_interests', methods=['GET'])
+def get_client_interests():
+    """Obtener todos los intereses de un cliente específico"""
+    try:
+        cliente_id = request.args.get('cliente_id')
+        
+        if not cliente_id:
+            return jsonify({"error": "Se requiere ID de cliente"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        cursor.execute("""
+            SELECT i.*, 
+                   p.nombre as producto_nombre,
+                   c.nombre as categoria_nombre,
+                   pr.nombre as promocion_nombre,
+                   m.contenido_texto as mensaje_texto
+            FROM interes i
+            LEFT JOIN producto p ON i.producto_id = p.id
+            LEFT JOIN categoria c ON i.categoria_id = c.id
+            LEFT JOIN promocion pr ON i.promocion_id = pr.id
+            LEFT JOIN mensaje m ON i.mensaje_id = m.id
+            WHERE i.cliente_id = %s
+            ORDER BY i.fecha_interes DESC
+        """, (cliente_id,))
+        
+        interests = []
+        for row in cursor.fetchall():
+            interest_type = None
+            entity_id = None
+            entity_name = None
+            
+            if row['producto_id']:
+                interest_type = 'producto'
+                entity_id = row['producto_id']
+                entity_name = row['producto_nombre']
+            elif row['categoria_id']:
+                interest_type = 'categoria'
+                entity_id = row['categoria_id']
+                entity_name = row['categoria_nombre']
+            elif row['promocion_id']:
+                interest_type = 'promocion'
+                entity_id = row['promocion_id']
+                entity_name = row['promocion_nombre']
+            
+            interests.append({
+                "id": row['id'],
+                "tipo_interes": interest_type,
+                "entidad_id": entity_id,
+                "entidad_nombre": entity_name,
+                "nivel_interes": float(row['nivel_interes']),
+                "mensaje_id": row['mensaje_id'],
+                "mensaje_texto": row['mensaje_texto'],
+                "fecha_interes": row['fecha_interes'].isoformat() if row['fecha_interes'] else None
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "cliente_id": cliente_id,
+            "intereses": interests
+        })
+    
+    except Exception as e:
+        logger.error(f"Error al recuperar intereses del cliente: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/send_message', methods=['POST'])
@@ -273,6 +642,7 @@ def send_message():
         
         store_message(
             conversation_id=conversation_id,
+            is_bot=True,
             message_type=message_type,
             content_text=message_text,
             media_url=media_url,
@@ -370,9 +740,9 @@ def get_clients():
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         cursor.execute("""
-            SELECT c.*, COUNT(m.id) as message_count 
+            SELECT c.*, COUNT(m.id) as conversation_count 
             FROM cliente c
-            LEFT JOIN mensaje m ON c.id = m.cliente_id
+            LEFT JOIN conversacion m ON c.id = m.cliente_id
             GROUP BY c.id
             ORDER BY c.fecha_creacion DESC
         """)
@@ -385,7 +755,7 @@ def get_clients():
                 "name": row['nombre'],
                 "email": row['correo'],
                 "created_at": row['fecha_creacion'].isoformat() if row['fecha_creacion'] else None,
-                "message_count": row['message_count']
+                "conversation_count": row['conversation_count']
             })
         
         cursor.close()
