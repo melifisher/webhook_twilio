@@ -768,6 +768,425 @@ def get_clients():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/get_clients_with_interests', methods=['GET'])
+def get_clients_with_interests():
+    """
+    Obtener clientes que han mostrado interés en productos/categorías/promociones
+    con filtros opcionales de tiempo y nivel de interés
+    """
+    try:
+        # Parámetros opcionales
+        days = request.args.get('days', '30')  # Por defecto, último mes
+        min_interest = request.args.get('min_interest', '0.6')  # Nivel mínimo de interés
+        
+        try:
+            days = int(days)
+            min_interest = float(min_interest)
+        except ValueError:
+            return jsonify({"error": "Los parámetros 'days' y 'min_interest' deben ser numéricos"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        # Obtener clientes con intereses significativos en el período especificado
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.telefono, c.nombre, c.correo,
+                   MAX(i.nivel_interes) as max_interes,
+                   COUNT(DISTINCT i.id) as total_intereses
+            FROM cliente c
+            JOIN interes i ON c.id = i.cliente_id
+            WHERE i.fecha_interes >= NOW() - INTERVAL '%s days'
+            AND i.nivel_interes >= %s
+            GROUP BY c.id, c.telefono, c.nombre, c.correo
+            ORDER BY max_interes DESC, total_intereses DESC
+        """, (days, min_interest))
+        
+        clients = []
+        for row in cursor.fetchall():
+            clients.append({
+                "id": row['id'],
+                "phone": row['telefono'],
+                "name": row['nombre'],
+                "email": row['correo'],
+                "max_interest_level": float(row['max_interes']),
+                "total_interests": row['total_intereses']
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return clients
+    
+    except Exception as e:
+        logger.error(f"Error al recuperar clientes con intereses: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/get_client_recommendations', methods=['GET'])
+def get_client_recommendations():
+    """
+    Obtiene recomendaciones de productos para un cliente específico 
+    basadas en sus intereses
+    """
+    try:
+        cliente_id = request.args.get('cliente_id')
+        limit = request.args.get('limit', '3')  # Número de recomendaciones
+        
+        if not cliente_id:
+            return jsonify({"error": "Se requiere cliente_id"}), 400
+        
+        try:
+            limit = int(limit)
+        except ValueError:
+            return jsonify({"error": "El parámetro 'limit' debe ser numérico"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        # Obtener intereses del cliente
+        cursor.execute("""
+            WITH cliente_intereses AS (
+                SELECT 
+                    COALESCE(i.producto_id, NULL) as producto_id,
+                    COALESCE(i.categoria_id, NULL) as categoria_id,
+                    i.nivel_interes
+                FROM interes i
+                WHERE i.cliente_id = %s
+                ORDER BY i.fecha_interes DESC, i.nivel_interes DESC
+            )
+            SELECT 
+                p.id, 
+                p.nombre, 
+                p.descripcion,
+                COALESCE(
+                    (SELECT MAX(pr.descuento_porcentaje)
+                     FROM promo_producto pr
+                     JOIN promocion prom ON pr.promocion_id = prom.id
+                     WHERE pr.producto_id = p.id
+                     AND CURRENT_DATE BETWEEN prom.fecha_inicio AND prom.fecha_fin),
+                    0
+                ) as descuento,
+                (SELECT precio.valor
+                 FROM precio
+                 WHERE precio.producto_id = p.id
+                 AND (precio.fecha_fin IS NULL OR precio.fecha_fin >= CURRENT_DATE)
+                 ORDER BY precio.fecha_inicio DESC
+                 LIMIT 1) as precio,
+                (SELECT MIN(img.url)
+                 FROM imagen img
+                 WHERE img.producto_id = p.id
+                 LIMIT 1) as imagen_url
+            FROM producto p
+            WHERE p.activo = TRUE AND (
+                -- Productos que son del mismo interés directo del cliente
+                p.id IN (SELECT producto_id FROM cliente_intereses WHERE producto_id IS NOT NULL)
+                OR 
+                -- Productos de las mismas categorías de interés del cliente
+                p.categoria_id IN (SELECT categoria_id FROM cliente_intereses WHERE categoria_id IS NOT NULL)
+                OR
+                -- Si no hay coincidencias, recomendar productos populares
+                (NOT EXISTS (SELECT 1 FROM cliente_intereses WHERE producto_id IS NOT NULL OR categoria_id IS NOT NULL))
+            )
+            ORDER BY 
+                -- Priorizar productos con descuento
+                descuento DESC,
+                -- Priorizar productos que coinciden directamente con intereses
+                CASE WHEN p.id IN (SELECT producto_id FROM cliente_intereses WHERE producto_id IS NOT NULL) THEN 1 ELSE 0 END DESC,
+                -- Luego priorizar productos de categorías de interés
+                CASE WHEN p.categoria_id IN (SELECT categoria_id FROM cliente_intereses WHERE categoria_id IS NOT NULL) THEN 1 ELSE 0 END DESC
+            LIMIT %s
+        """, (cliente_id, limit))
+        
+        recomendaciones = []
+        for row in cursor.fetchall():
+            recomendaciones.append({
+                "id": row['id'],
+                "nombre": row['nombre'],
+                "descripcion": row['descripcion'],
+                "precio": float(row['precio']) if row['precio'] else None,
+                "descuento": float(row['descuento']) if row['descuento'] else 0,
+                "precio_final": float(row['precio'] * (1 - row['descuento']/100)) if row['precio'] and row['descuento'] else (float(row['precio']) if row['precio'] else None),
+                "imagen_url": row['imagen_url']
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "cliente_id": cliente_id,
+            "recomendaciones": recomendaciones
+        })
+    
+    except Exception as e:
+        logger.error(f"Error al obtener recomendaciones para cliente: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/generate_personalized_message', methods=['POST'])
+def generate_personalized_message():
+    """
+    Genera un mensaje personalizado para un cliente basado en sus intereses
+    utilizando OpenAI
+    """
+    try:
+        data = request.json
+        cliente_id = data.get('cliente_id')
+        template_type = data.get('template_type', 'general')  # 'general', 'promocion', 'seguimiento'
+        include_products = data.get('include_products', True)
+        
+        if not cliente_id:
+            return jsonify({"error": "Se requiere cliente_id"}), 400
+        
+        # Obtener datos del cliente
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        cursor.execute("SELECT * FROM cliente WHERE id = %s", (cliente_id,))
+        cliente = cursor.fetchone()
+        
+        if not cliente:
+            return jsonify({"error": "Cliente no encontrado"}), 404
+        
+        # Obtener intereses del cliente
+        cursor.execute("""
+            SELECT i.*, 
+                   p.nombre as producto_nombre,
+                   c.nombre as categoria_nombre,
+                   pr.nombre as promocion_nombre
+            FROM interes i
+            LEFT JOIN producto p ON i.producto_id = p.id
+            LEFT JOIN categoria c ON i.categoria_id = c.id
+            LEFT JOIN promocion pr ON i.promocion_id = pr.id
+            WHERE i.cliente_id = %s
+            ORDER BY i.nivel_interes DESC, i.fecha_interes DESC
+            LIMIT 5
+        """, (cliente_id,))
+        
+        intereses = []
+        for row in cursor.fetchall():
+            interes_data = {
+                "nivel": float(row['nivel_interes']),
+                "fecha": row['fecha_interes'].isoformat() if row['fecha_interes'] else None
+            }
+            
+            if row['producto_id']:
+                interes_data["tipo"] = "producto"
+                interes_data["nombre"] = row['producto_nombre']
+                interes_data["id"] = row['producto_id']
+            elif row['categoria_id']:
+                interes_data["tipo"] = "categoria"
+                interes_data["nombre"] = row['categoria_nombre']
+                interes_data["id"] = row['categoria_id']
+            elif row['promocion_id']:
+                interes_data["tipo"] = "promocion"
+                interes_data["nombre"] = row['promocion_nombre']
+                interes_data["id"] = row['promocion_id']
+                
+            intereses.append(interes_data)
+        
+        # Obtener recomendaciones de productos si se solicita
+        recomendaciones = []
+        if include_products:
+            cursor.execute("""
+                SELECT p.id, p.nombre, p.descripcion,
+                       (SELECT precio.valor
+                        FROM precio
+                        WHERE precio.producto_id = p.id
+                        AND (precio.fecha_fin IS NULL OR precio.fecha_fin >= CURRENT_DATE)
+                        ORDER BY precio.fecha_inicio DESC
+                        LIMIT 1) as precio,
+                       COALESCE(
+                           (SELECT MAX(pr.descuento_porcentaje)
+                            FROM promo_producto pr
+                            JOIN promocion prom ON pr.promocion_id = prom.id
+                            WHERE pr.producto_id = p.id
+                            AND CURRENT_DATE BETWEEN prom.fecha_inicio AND prom.fecha_fin),
+                           0
+                       ) as descuento
+                FROM producto p
+                WHERE p.activo = TRUE
+                AND (
+                    p.id IN (SELECT producto_id FROM interes WHERE cliente_id = %s AND producto_id IS NOT NULL)
+                    OR p.categoria_id IN (SELECT categoria_id FROM interes WHERE cliente_id = %s AND categoria_id IS NOT NULL)
+                )
+                ORDER BY descuento DESC
+                LIMIT 3
+            """, (cliente_id, cliente_id))
+            
+            for row in cursor.fetchall():
+                precio_original = float(row['precio']) if row['precio'] else None
+                descuento = float(row['descuento']) if row['descuento'] else 0
+                precio_final = None
+                
+                if precio_original is not None:
+                    precio_final = precio_original * (1 - descuento/100)
+                    
+                recomendaciones.append({
+                    "id": row['id'],
+                    "nombre": row['nombre'],
+                    "descripcion": row['descripcion'],
+                    "precio_original": precio_original,
+                    "descuento": descuento,
+                    "precio_final": precio_final
+                })
+        
+        cursor.close()
+        conn.close()
+        
+        # Plantillas según el tipo solicitado
+        templates = {
+            "general": "Crea un mensaje amistoso para WhatsApp dirigido a un cliente basado en sus intereses. El mensaje debe ser corto, personal y con un llamado a la acción claro.",
+            "promocion": "Crea un mensaje promocional para WhatsApp que mencione específicamente descuentos o promociones relevantes para los intereses del cliente. Debe ser breve, atractivo y generar sensación de urgencia.",
+            "seguimiento": "Crea un mensaje de seguimiento para WhatsApp que pregunte sobre la experiencia o interés previo del cliente. El mensaje debe ser corto, conversacional y buscar reenganche."
+        }
+        
+        template = templates.get(template_type, templates["general"])
+        
+        # Preparar el contexto para OpenAI
+        nombre_cliente = cliente['nombre']
+        intereses_texto = json.dumps(intereses, ensure_ascii=False)
+        recomendaciones_texto = json.dumps(recomendaciones, ensure_ascii=False) if recomendaciones else "[]"
+        
+        # Llamada a OpenAI
+        prompt = f"""
+        {template}
+        
+        Datos del cliente:
+        - Nombre: {nombre_cliente}
+        - Intereses detectados: {intereses_texto}
+        - Productos recomendados: {recomendaciones_texto}
+        
+        El mensaje debe:
+        - Ser personalizado usando el nombre del cliente
+        - Tener entre 100-200 caracteres
+        - Ser amigable y conversacional (apropiado para WhatsApp)
+        - Incluir emojis relevantes pero sin exagerar
+        - Terminar con un llamado a la acción claro
+        
+        Si hay productos con descuento, menciona brevemente uno.
+        No menciones explícitamente que estás usando sus datos de interés.
+        """
+        
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Eres un asistente de marketing especializado en crear mensajes personalizados para WhatsApp."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
+        
+        mensaje = response.choices[0].message.content.strip()
+        
+        return jsonify({
+            "cliente_id": cliente_id,
+            "nombre_cliente": nombre_cliente,
+            "telefono": cliente['telefono'],
+            "mensaje_personalizado": mensaje,
+            "intereses": intereses,
+            "recomendaciones": recomendaciones,
+            "tipo_plantilla": template_type
+        })
+    
+    except Exception as e:
+        logger.error(f"Error al generar mensaje personalizado: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/send_bulk_personalized_messages', methods=['POST'])
+def send_bulk_personalized_messages():
+    """
+    Endpoint para enviar mensajes personalizados en bloque a clientes con intereses
+    """
+    try:
+        data = request.json
+        days = data.get('days', 30)
+        min_interest = data.get('min_interest', 0.6)
+        template_type = data.get('template_type', 'general')
+        test_mode = data.get('test_mode', True)  # Por defecto en modo prueba
+        max_clients = data.get('max_clients', 10)  # Limitar número de clientes
+        
+        # Obtener clientes con intereses
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.telefono, c.nombre
+            FROM cliente c
+            JOIN interes i ON c.id = i.cliente_id
+            WHERE i.fecha_interes >= NOW() - INTERVAL %s DAY
+            AND i.nivel_interes >= %s
+            GROUP BY c.id, c.telefono, c.nombre
+            ORDER BY MAX(i.nivel_interes) DESC
+            LIMIT %s
+        """, (days, min_interest, max_clients))
+        
+        clients = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        results = []
+        
+        for client in clients:
+            try:
+                # Generar mensaje personalizado (llamada interna)
+                mensaje_data = {
+                    "cliente_id": client['id'],
+                    "template_type": template_type,
+                    "include_products": True
+                }
+                
+                # En lugar de hacer una llamada HTTP, podemos llamar directamente a la función
+                with app.test_request_context(
+                    '/generate_personalized_message',
+                    method='POST',
+                    json=mensaje_data
+                ):
+                    response = generate_personalized_message()
+                    mensaje_result = json.loads(response.get_data(as_text=True))
+                
+                # Si no está en modo prueba, enviar el mensaje
+                if not test_mode:
+                    # Preparar datos para envío
+                    whatsapp_number = client['telefono']
+                    if not whatsapp_number.startswith('whatsapp:'):
+                        whatsapp_number = f"whatsapp:{whatsapp_number}"
+                    
+                    # Enviar mensaje a través de Twilio
+                    message_params = {
+                        'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                        'to': whatsapp_number,
+                        'body': mensaje_result['mensaje_personalizado']
+                    }
+                    
+                    twilio_message = client.messages.create(**message_params)
+                    mensaje_result['sent'] = True
+                    mensaje_result['twilio_sid'] = twilio_message.sid
+                else:
+                    mensaje_result['sent'] = False
+                    mensaje_result['test_mode'] = True
+                    
+                results.append(mensaje_result)
+                
+            except Exception as e:
+                logger.error(f"Error procesando cliente {client['id']}: {e}")
+                results.append({
+                    "cliente_id": client['id'],
+                    "error": str(e),
+                    "sent": False
+                })
+        
+        return jsonify({
+            "success": True,
+            "clients_processed": len(results),
+            "test_mode": test_mode,
+            "results": results
+        })
+    
+    except Exception as e:
+        logger.error(f"Error en envío masivo de mensajes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Verificación simple del estado de salud del servicio"""
