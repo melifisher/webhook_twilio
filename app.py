@@ -928,6 +928,7 @@ def generate_personalized_message():
     """
     try:
         data = request.json
+        logger.info(f"Datos recibidos para generar mensaje: {data}")
         cliente_id = data.get('cliente_id')
         template_type = data.get('template_type', 'general')  # 'general', 'promocion', 'seguimiento'
         include_products = data.get('include_products', True)
