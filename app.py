@@ -312,8 +312,8 @@ def get_or_create_conversation(client_id):
         cursor.close()
         conn.close()
 
-def store_message(conversation_id, is_bot=False, message_type, content_text=None, 
-                 media_url=None, media_mimetype=None, media_filename=None):
+def store_message(conversation_id, message_type, content_text=None, 
+                 media_url=None, media_mimetype=None, media_filename=None, is_bot=False):
     """Almacenar un mensaje en la base de datos"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -642,12 +642,12 @@ def send_message():
         
         store_message(
             conversation_id=conversation_id,
-            is_bot=True,
             message_type=message_type,
             content_text=message_text,
             media_url=media_url,
             media_mimetype=media_mimetype,
-            media_filename=media_filename
+            media_filename=media_filename,
+            is_bot=True
         )
         
         return jsonify({
