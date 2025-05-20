@@ -761,9 +761,7 @@ def get_clients():
         cursor.close()
         conn.close()
         
-        return jsonify({
-            "clients": clients
-        })
+        return clients
     
     except Exception as e:
         logger.error(f"Error al recuperar clientes: {e}")
