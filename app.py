@@ -280,6 +280,24 @@ def get_or_create_client(phone_number, name=None):
         cursor.close()
         conn.close()
 
+def get_client_by_id(id, name=None):
+    """Obtener cliente por id"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("SELECT * FROM cliente WHERE id = %s", (id))
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_or_create_client: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
 def get_or_create_conversation(client_id):
     """Crear una nueva conversación o obtener la activa para hoy"""
     conn = get_db_connection()
@@ -351,7 +369,141 @@ def download_media(media_url):
         logger.error(f"Error al descargar medios: {media_response.status_code}")
         return None
 
+def create_message(incoming_msg, client_name=None):
+    """
+    Crea una respuesta personalizada usando la API de ChatGPT basada en el mensaje entrante
+    y el contexto de la empresa (productos, categorías, promociones).
+    
+    Args:
+        incoming_msg (str): El mensaje recibido del cliente
+        client_name (str, optional): Nombre del cliente si está disponible
+    
+    Returns:
+        str: Mensaje de respuesta generado
+    """
+    try:
+        productos = get_productos_activos()
+        categorias = get_categorias()
+        promociones = get_promociones_activas(datetime.now().date())
+        
+        productos_promocion = []
+        for promo in promociones:
+            prods = get_productos_en_promocion(promo['id'])
+            for prod in prods:
+                productos_promocion.append({
+                    "producto": prod['nombre'],
+                    "promocion": promo['nombre'],
+                    "descuento": prod['descuento_porcentaje'],
+                    "descripcion_promo": promo['descripcion'],
+                    "fecha_fin": promo['fecha_fin']
+                })
+        
+        # Construir el contexto para ChatGPT
+        context = {
+            "empresa": {
+                "nombre": "Ropa Bonita SC",
+                "descripcion": "Ofrecemos prendas de alta calidad para nuestros clientes" 
+            },
+            "productos": [{"nombre": p['nombre'], "descripcion": p['descripcion'], 
+                          "categoria": next((c['nombre'] for c in categorias if c['id'] == p['categoria_id']), None)} 
+                         for p in productos],
+            "categorias": [{"nombre": c['nombre'], "descripcion": c['descripcion']} for c in categorias],
+            "promociones_activas": [{"nombre": p['nombre'], "descripcion": p['descripcion'], 
+                                   "fecha_fin": p['fecha_fin'].strftime('%d/%m/%Y')} for p in promociones],
+            "productos_en_promocion": productos_promocion
+        }
+        
+        saludo = f"Hola {client_name}" if client_name else "Hola"
+        
+        prompt = f"""
+        Eres un asistente virtual amable y profesional de {context['empresa']['nombre']}.
+        
+        El cliente te ha enviado este mensaje: "{incoming_msg}"
+        
+        Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
+        
+        PRODUCTOS DISPONIBLES:
+        {', '.join([p['nombre'] for p in context['productos']])}
+        
+        CATEGORÍAS:
+        {', '.join([c['nombre'] for c in context['categorias']])}
+        
+        PROMOCIONES ACTIVAS:
+        {', '.join([f"{p['nombre']} (hasta {p['fecha_fin']})" for p in context['promociones_activas']])}
+        
+        PRODUCTOS EN PROMOCIÓN:
+        {', '.join([f"{p['producto']} con {p['descuento']}% de descuento en {p['promocion']}" for p in context['productos_en_promocion']])}
+        
+        Si el cliente pregunta por un producto específico, proporciona su descripción e información.
+        Si pregunta por promociones, menciona las activas relevantes.
+        Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información.
+        Si no puedes responder algo específico, ofrece contactar con un asesor humano.
+        
+        Tu respuesta debe comenzar con "{saludo}" y debe ser breve (máximo 3-4 frases).
+        """
+        
+        # Llamar a la API de ChatGPT
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente virtual de atención al cliente profesional y amigable."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.7
+        )
+        
+        message = response.choices[0].message["content"].strip()
+        
+        return message
+    
+    except Exception as e:
+        # En caso de error, devolver un mensaje genérico
+        import logging
+        logging.error(f"Error generando respuesta con ChatGPT: {e}")
+        return f"Hola{' ' + client_name if client_name else ''}, gracias por contactarnos. En breve un asesor se comunicará contigo."
 
+# Funciones auxiliares para la base de datos (implementar en db.py)
+
+def get_productos_activos():
+    """Obtiene todos los productos activos de la base de datos"""
+    from db import execute_query
+    query = """
+    SELECT id, nombre, descripcion, categoria_id 
+    FROM producto 
+    WHERE activo = TRUE
+    """
+    return execute_query(query)
+
+def get_categorias():
+    """Obtiene todas las categorías de la base de datos"""
+    from db import execute_query
+    query = """
+    SELECT id, nombre, descripcion 
+    FROM categoria
+    """
+    return execute_query(query)
+
+def get_promociones_activas(fecha_actual):
+    """Obtiene las promociones activas en la fecha actual"""
+    from db import execute_query
+    query = """
+    SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
+    FROM promocion
+    WHERE fecha_inicio <= %s AND fecha_fin >= %s
+    """
+    return execute_query(query, (fecha_actual, fecha_actual))
+
+def get_productos_en_promocion(promocion_id):
+    """Obtiene los productos asociados a una promoción específica"""
+    from db import execute_query
+    query = """
+    SELECT p.id, p.nombre, p.descripcion, pp.descuento_porcentaje
+    FROM producto p
+    JOIN promo_producto pp ON p.id = pp.producto_id
+    WHERE pp.promocion_id = %s AND p.activo = TRUE
+    """
+    return execute_query(query, (promocion_id,))
 
 ############ ENDPOINTS ############
 @app.route('/webhook', methods=['POST'])
@@ -397,13 +549,15 @@ def webhook():
                 content_text=incoming_msg
             )
         
-        #analizando 
-        if incoming_msg:
-            process_message_intent(mensaje_id, incoming_msg, client_id)
-        
         # Crear una respuesta
-        resp = MessagingResponse()
-        resp.message("Mensaje recibido, gracias!")
+        if incoming_msg:
+            client = get_client_by_id(client_id)
+            new_message = create_message(incoming_msg, client['nombre'])
+            resp = MessagingResponse()
+            resp.message(new_message)
+        else:
+            resp = MessagingResponse()
+            resp.message("Mensaje recibido, gracias!")
         
         return str(resp)
     
