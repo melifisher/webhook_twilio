@@ -286,13 +286,13 @@ def get_client_by_id(id, name=None):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
     try:
-        cursor.execute("SELECT * FROM cliente WHERE id = %s", (id))
+        cursor.execute("SELECT * FROM cliente WHERE id = %s", (id,))
         client = cursor.fetchone()
         
         return client
     except Exception as e:
         conn.rollback()
-        logger.error(f"Error en get_or_create_client: {e}")
+        logger.error(f"Error en get_client_by_id: {e}")
         raise
     finally:
         cursor.close()
