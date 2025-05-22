@@ -384,7 +384,7 @@ def download_media(media_url):
         logger.error(f"Error al descargar medios: {media_response.status_code}")
         return None
 
-def create_message(incoming_msg, client_name=None):
+def create_message(incoming_msg, conversacion_id,client_name=None):
     """
     Crea una respuesta personalizada usando la API de ChatGPT basada en el mensaje entrante
     y el contexto de la empresa (productos, categorías, promociones y precios).
@@ -397,6 +397,7 @@ def create_message(incoming_msg, client_name=None):
         str: Mensaje de respuesta generado
     """
     try:
+        conversacion = get_messages_by_conversation_id(conversacion_id)
         productos = get_productos_activos()
         categorias = get_categorias()
         promociones = get_promociones_activas(datetime.now().date())
@@ -455,6 +456,9 @@ def create_message(incoming_msg, client_name=None):
         
         El cliente llamado "{client_name}", te ha enviado este mensaje: "{incoming_msg}"
         
+        Esta es la conversacion  hasta ahora:
+        "{chr(10).join([f"{m['contenido_texto']} (ID: {m['id']})" for m in conversacion])}"
+        -------
         Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
         
         PRODUCTOS DISPONIBLES CON PRECIOS:
@@ -476,7 +480,7 @@ def create_message(incoming_msg, client_name=None):
         - Si pregunta por rango de precios o productos más económicos/caros, ayúdale con esa información
         - Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información
         - Si no puedes responder algo específico, ofrece contactar con un asesor humano
-        
+        - Sigue el contexto de la conversación si es necesario
         La respuesta debe ser breve (máximo 3-4 frases) pero informativa.
         """
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
@@ -701,9 +705,25 @@ def webhook():
         client_id = get_or_create_client(wa_id)
         conversation_id = get_or_create_conversation(client_id)
         
+        # Crear una respuesta
+        if incoming_msg:
+            client = get_client_by_id(client_id)
+            new_message = create_message(incoming_msg, conversation_id, client['nombre'])
+            resp = MessagingResponse()
+            resp.message(new_message)
+            mensaje_id = store_message(
+                conversation_id=conversation_id,
+                message_type='text',
+                content_text=new_message,
+                is_bot=True
+            )
+        else:
+            resp = MessagingResponse()
+            resp.message("Mensaje recibido, gracias!")
+        
         # Verificar si hay medios
         num_media = int(request.form.get('NumMedia', '0'))
-        
+
         # Almacenar mensaje
         if num_media > 0:
             # Manejar mensaje con medios
@@ -730,22 +750,6 @@ def webhook():
                 message_type='text',
                 content_text=incoming_msg
             )
-        
-        # Crear una respuesta
-        if incoming_msg:
-            client = get_client_by_id(client_id)
-            new_message = create_message(incoming_msg, client['nombre'])
-            resp = MessagingResponse()
-            resp.message(new_message)
-            mensaje_id = store_message(
-                conversation_id=conversation_id,
-                message_type='text',
-                content_text=new_message,
-                is_bot=True
-            )
-        else:
-            resp = MessagingResponse()
-            resp.message("Mensaje recibido, gracias!")
         
         return str(resp)
     
