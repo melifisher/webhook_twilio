@@ -296,6 +296,23 @@ def get_client_by_id(id):
         cursor.close()
         conn.close()
 
+def get_messages_by_conversation_id(id):
+    """Obtener mensajes de la conversacion"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cursor.execute("SELECT * FROM  mensaje WHERE conversacion_id = %s", (id,))
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_messages_by_conversation_id: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
 def get_or_create_conversation(client_id):
     """Crear una nueva conversación o obtener la activa para hoy"""
     conn = get_db_connection()
@@ -370,7 +387,7 @@ def download_media(media_url):
 def create_message(incoming_msg, client_name=None):
     """
     Crea una respuesta personalizada usando la API de ChatGPT basada en el mensaje entrante
-    y el contexto de la empresa (productos, categorías, promociones).
+    y el contexto de la empresa (productos, categorías, promociones y precios).
     
     Args:
         incoming_msg (str): El mensaje recibido del cliente
@@ -384,6 +401,9 @@ def create_message(incoming_msg, client_name=None):
         categorias = get_categorias()
         promociones = get_promociones_activas(datetime.now().date())
         
+        # Obtener precios actuales de los productos
+        precios_productos = get_precios_actuales()
+        
         productos_promocion = []
         for promo in promociones:
             prods = get_productos_en_promocion(promo['id'])
@@ -396,20 +416,39 @@ def create_message(incoming_msg, client_name=None):
                     "fecha_fin": promo['fecha_fin']
                 })
         
+        # Enriquecer productos con información de precios
+        productos_con_precios = []
+        for p in productos:
+            precio_info = next((precio for precio in precios_productos if precio['producto_id'] == p['id']), None)
+            categoria_nombre = next((c['nombre'] for c in categorias if c['id'] == p['categoria_id']), None)
+            
+            producto_completo = {
+                "nombre": p['nombre'],
+                "descripcion": p['descripcion'],
+                "categoria": categoria_nombre,
+                "precio": precio_info['valor'] if precio_info else None,
+                "lista_precio": precio_info['lista_nombre'] if precio_info else None
+            }
+            productos_con_precios.append(producto_completo)
+        
         # Construir el contexto para ChatGPT
         context = {
             "empresa": {
                 "nombre": "Ropa Bonita SC",
                 "descripcion": "Ofrecemos prendas de alta calidad para nuestros clientes" 
             },
-            "productos": [{"nombre": p['nombre'], "descripcion": p['descripcion'], 
-                          "categoria": next((c['nombre'] for c in categorias if c['id'] == p['categoria_id']), None)} 
-                         for p in productos],
+            "productos": productos_con_precios,
             "categorias": [{"nombre": c['nombre'], "descripcion": c['descripcion']} for c in categorias],
             "promociones_activas": [{"nombre": p['nombre'], "descripcion": p['descripcion'], 
                                    "fecha_fin": p['fecha_fin'].strftime('%d/%m/%Y')} for p in promociones],
             "productos_en_promocion": productos_promocion
         }
+        
+        # Crear string de productos con precios para el prompt
+        productos_info = []
+        for p in productos_con_precios:
+            precio_str = f"${p['precio']:.2f}" if p['precio'] else "Precio no disponible"
+            productos_info.append(f"{p['nombre']} ({p['categoria']}) - {precio_str}")
         
         prompt = f"""
         Eres un asistente virtual amable y profesional de {context['empresa']['nombre']}.
@@ -418,8 +457,8 @@ def create_message(incoming_msg, client_name=None):
         
         Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
         
-        PRODUCTOS DISPONIBLES:
-        {', '.join([p['nombre'] for p in context['productos']])}
+        PRODUCTOS DISPONIBLES CON PRECIOS:
+        {chr(10).join(productos_info)}
         
         CATEGORÍAS:
         {', '.join([c['nombre'] for c in context['categorias']])}
@@ -430,12 +469,15 @@ def create_message(incoming_msg, client_name=None):
         PRODUCTOS EN PROMOCIÓN:
         {', '.join([f"{p['producto']} con {p['descuento']}% de descuento en {p['promocion']}" for p in context['productos_en_promocion']])}
         
-        Si el cliente pregunta por un producto específico, proporciona su descripción e información.
-        Si pregunta por promociones, menciona las activas relevantes.
-        Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información.
-        Si no puedes responder algo específico, ofrece contactar con un asesor humano.
+        INSTRUCCIONES:
+        - Si el cliente pregunta por precios, proporciona la información actual disponible
+        - Si pregunta por un producto específico, incluye descripción, precio y categoría
+        - Si pregunta por promociones, menciona las activas y cómo afectan los precios
+        - Si pregunta por rango de precios o productos más económicos/caros, ayúdale con esa información
+        - Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información
+        - Si no puedes responder algo específico, ofrece contactar con un asesor humano
         
-        La respuesta debe ser breve (máximo 3-4 frases).
+        La respuesta debe ser breve (máximo 3-4 frases) pero informativa.
         """
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
         
@@ -443,7 +485,7 @@ def create_message(incoming_msg, client_name=None):
         response = clientOpenAi.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt},
-                     {"role": "system", "content": "Eres un asistente virtual de atención al cliente profesional y amigable."}],
+                     {"role": "system", "content": "Eres un asistente virtual de atención al cliente profesional y amigable. Proporciona información precisa sobre precios cuando sea solicitada."}],
         )
         
         message = response.choices[0].message.content.strip()
@@ -465,9 +507,9 @@ def get_productos_activos():
         cursor.execute("""SELECT id, nombre, descripcion, categoria_id 
             FROM producto 
             WHERE activo = TRUE""")
-        clients = cursor.fetchall()
+        products = cursor.fetchall()
         
-        return clients
+        return products
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_productos_activos: {e}")
@@ -483,9 +525,9 @@ def get_categorias():
     
     try:
         cursor.execute("""SELECT id, nombre, descripcion FROM categoria""")
-        client = cursor.fetchall()
+        categories = cursor.fetchall()
         
-        return client
+        return categories
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_categorias: {e}")
@@ -504,9 +546,9 @@ def get_promociones_activas(fecha_actual):
         cursor.execute("""SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
             FROM promocion
             WHERE fecha_inicio <= %s AND fecha_fin >= %s""", (fecha_actual, fecha_actual))
-        client = cursor.fetchall()
-        logger.info(f"Promociones activas: {client}")
-        return client
+        promotions = cursor.fetchall()
+        logger.info(f"Promociones activas: {promotions}")
+        return promotions
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_promociones_activas: {e}")
@@ -525,9 +567,9 @@ def get_productos_en_promocion(promocion_id):
         FROM producto p
         JOIN promo_producto pp ON p.id = pp.producto_id
         WHERE pp.promocion_id = %s AND p.activo = TRUE""", (promocion_id,))
-        client = cursor.fetchall()
+        promo_products = cursor.fetchall()
         
-        return client
+        return promo_products
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_productos_en_promocion: {e}")
@@ -536,6 +578,115 @@ def get_productos_en_promocion(promocion_id):
         cursor.close()
         conn.close()
 
+def get_precios_actuales():
+    """
+    Obtiene los precios actuales vigentes para todos los productos activos.
+    Retorna el precio más reciente válido para cada producto.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""
+            SELECT DISTINCT ON (p.producto_id) 
+                   p.producto_id,
+                   p.valor,
+                   lp.nombre as lista_nombre,
+                   lp.id as lista_id,
+                   p.fecha_inicio,
+                   p.fecha_fin
+            FROM precio p
+            JOIN lista_precios lp ON p.lista_precios_id = lp.id
+            JOIN producto prod ON p.producto_id = prod.id
+            WHERE prod.activo = TRUE
+              AND p.fecha_inicio <= CURRENT_DATE
+              AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURRENT_DATE)
+            ORDER BY p.producto_id, p.fecha_inicio DESC
+        """)
+        prices = cursor.fetchall()
+        
+        return prices
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_precios_actuales: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_precios_por_producto(producto_id):
+    """
+    Obtiene todos los precios vigentes para un producto específico
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""
+            SELECT p.valor,
+                   lp.nombre as lista_nombre,
+                   p.fecha_inicio,
+                   p.fecha_fin
+            FROM precio p
+            JOIN lista_precios lp ON p.lista_precios_id = lp.id
+            WHERE p.producto_id = %s
+              AND p.fecha_inicio <= CURRENT_DATE
+              AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURRENT_DATE)
+            ORDER BY p.fecha_inicio DESC
+        """, (producto_id,))
+        prices = cursor.fetchall()
+        
+        return prices
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_precios_por_producto: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_productos_por_rango_precio(precio_min=None, precio_max=None):
+    """
+    Obtiene productos filtrados por rango de precios
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        base_query = """
+            SELECT DISTINCT prod.id, prod.nombre, prod.descripcion, 
+                   cat.nombre as categoria_nombre, p.valor as precio
+            FROM producto prod
+            JOIN categoria cat ON prod.categoria_id = cat.id
+            JOIN precio p ON prod.id = p.producto_id
+            JOIN lista_precios lp ON p.lista_precios_id = lp.id
+            WHERE prod.activo = TRUE
+              AND p.fecha_inicio <= CURRENT_DATE
+              AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURRENT_DATE)
+        """
+        
+        params = []
+        if precio_min is not None:
+            base_query += " AND p.valor >= %s"
+            params.append(precio_min)
+        
+        if precio_max is not None:
+            base_query += " AND p.valor <= %s"
+            params.append(precio_max)
+        
+        base_query += " ORDER BY p.valor ASC"
+        
+        cursor.execute(base_query, params)
+        products = cursor.fetchall()
+        
+        return products
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_productos_por_rango_precio: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 ############ ENDPOINTS ############
 @app.route('/webhook', methods=['POST'])
 def webhook():
