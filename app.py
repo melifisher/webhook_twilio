@@ -133,15 +133,14 @@ def analyze_intent(message_text, catalog_data):
         """
         
         # Llamada a la API de OpenAI
-        response = openai.chat.completions.create(
-            model="gpt-4o",  # o el modelo que prefieras
+        response = clientOpenAi.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Eres un sistema de análisis de intenciones para un e-commerce."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3
         )
-        
         # Extraer y procesar la respuesta
         result_text = response.choices[0].message.content.strip()
         
@@ -412,12 +411,10 @@ def create_message(incoming_msg, client_name=None):
             "productos_en_promocion": productos_promocion
         }
         
-        saludo = f"Hola {client_name}" if client_name else "Hola"
-        
         prompt = f"""
         Eres un asistente virtual amable y profesional de {context['empresa']['nombre']}.
         
-        El cliente te ha enviado este mensaje: "{incoming_msg}"
+        El cliente llamado "{client_name}", te ha enviado este mensaje: "{incoming_msg}"
         
         Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
         
@@ -438,7 +435,7 @@ def create_message(incoming_msg, client_name=None):
         Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información.
         Si no puedes responder algo específico, ofrece contactar con un asesor humano.
         
-        Tu respuesta debe comenzar con "{saludo}" y debe ser breve (máximo 3-4 frases).
+        La respuesta debe ser breve (máximo 3-4 frases).
         """
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
         
@@ -499,15 +496,16 @@ def get_categorias():
 
 def get_promociones_activas(fecha_actual):
     """Obtiene las promociones activas en la fecha actual"""
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        logger.info(f"Fecha actual: {fecha_actual}")
+    
         cursor.execute("""SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
             FROM promocion
             WHERE fecha_inicio <= %s AND fecha_fin >= %s""", (fecha_actual, fecha_actual))
         client = cursor.fetchall()
-        
+        logger.info(f"Promociones activas: {client}")
         return client
     except Exception as e:
         conn.rollback()
@@ -588,6 +586,12 @@ def webhook():
             new_message = create_message(incoming_msg, client['nombre'])
             resp = MessagingResponse()
             resp.message(new_message)
+            mensaje_id = store_message(
+                conversation_id=conversation_id,
+                message_type='text',
+                content_text=new_message,
+                is_bot=True
+            )
         else:
             resp = MessagingResponse()
             resp.message("Mensaje recibido, gracias!")
@@ -599,9 +603,9 @@ def webhook():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/analyze_message_intent', methods=['POST'])
+@app.route('/analyze_message_intent', methods=['POST'])#TODO: change to conversation
 def analyze_message_intent():
-    """Analiza las intenciones de un mensaje existente"""
+    """Analiza las intenciones de una conversacion existente"""
     try:
         data = request.json
         mensaje_id = data.get('mensaje_id')
@@ -1253,8 +1257,8 @@ def generate_personalized_message():
         No menciones explícitamente que estás usando sus datos de interés.
         """
         
-        response = openai.chat.completions.create(
-            model="gpt-4o",
+        response = clientOpenAi.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Eres un asistente de marketing especializado en crear mensajes personalizados para WhatsApp."},
                 {"role": "user", "content": prompt}
