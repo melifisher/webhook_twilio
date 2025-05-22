@@ -753,6 +753,14 @@ def webhook():
             resp = MessagingResponse()
             resp.message("Mensaje recibido, gracias!")
         
+        analisis = process_message_intent(
+            mensaje_id=mensaje_id,
+            message_text=incoming_msg,
+            cliente_id=client_id
+        )
+
+        logger.info(f"Análisis de intenciones: {analisis}")
+        
         return str(resp)
     
     except Exception as e:
