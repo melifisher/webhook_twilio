@@ -285,7 +285,7 @@ def get_client_by_id(id, name=None):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    try:
+    try:get_db_connection
         cursor.execute("SELECT * FROM cliente WHERE id = %s", (id,))
         client = cursor.fetchone()
         
@@ -441,6 +441,7 @@ def create_message(incoming_msg, client_name=None):
         
         Tu respuesta debe comenzar con "{saludo}" y debe ser breve (máximo 3-4 frases).
         """
+        logger.info(f"Prompt enviado a ChatGPT: {prompt}")
         
         # Llamar a la API de ChatGPT
         response = openai.ChatCompletion.create(
@@ -459,7 +460,7 @@ def create_message(incoming_msg, client_name=None):
     
     except Exception as e:
         # En caso de error, devolver un mensaje genérico
-        import logging
+        logger.error(f"Error generando respuesta con ChatGPT: {e}")
         logging.error(f"Error generando respuesta con ChatGPT: {e}")
         return f"Hola{' ' + client_name if client_name else ''}, gracias por contactarnos. En breve un asesor se comunicará contigo."
 
@@ -467,43 +468,82 @@ def create_message(incoming_msg, client_name=None):
 
 def get_productos_activos():
     """Obtiene todos los productos activos de la base de datos"""
-    from db import execute_query
-    query = """
-    SELECT id, nombre, descripcion, categoria_id 
-    FROM producto 
-    WHERE activo = TRUE
-    """
-    return execute_query(query)
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""SELECT id, nombre, descripcion, categoria_id 
+            FROM producto 
+            WHERE activo = TRUE""")
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_client_by_id: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 def get_categorias():
     """Obtiene todas las categorías de la base de datos"""
-    from db import execute_query
-    query = """
-    SELECT id, nombre, descripcion 
-    FROM categoria
-    """
-    return execute_query(query)
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""SELECT id, nombre, descripcion FROM categoria""")
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_client_by_id: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 def get_promociones_activas(fecha_actual):
     """Obtiene las promociones activas en la fecha actual"""
-    from db import execute_query
-    query = """
-    SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
-    FROM promocion
-    WHERE fecha_inicio <= %s AND fecha_fin >= %s
-    """
-    return execute_query(query, (fecha_actual, fecha_actual))
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
+            FROM promocion
+            WHERE fecha_inicio <= %s AND fecha_fin >= %s""", (fecha_actual, fecha_actual))
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_client_by_id: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 def get_productos_en_promocion(promocion_id):
     """Obtiene los productos asociados a una promoción específica"""
-    from db import execute_query
-    query = """
-    SELECT p.id, p.nombre, p.descripcion, pp.descuento_porcentaje
-    FROM producto p
-    JOIN promo_producto pp ON p.id = pp.producto_id
-    WHERE pp.promocion_id = %s AND p.activo = TRUE
-    """
-    return execute_query(query, (promocion_id,))
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("""SELECT p.id, p.nombre, p.descripcion, pp.descuento_porcentaje
+        FROM producto p
+        JOIN promo_producto pp ON p.id = pp.producto_id
+        WHERE pp.promocion_id = %s AND p.activo = TRUE""", (promocion_id,))
+        client = cursor.fetchone()
+        
+        return client
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error en get_client_by_id: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 ############ ENDPOINTS ############
 @app.route('/webhook', methods=['POST'])
