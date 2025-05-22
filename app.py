@@ -280,12 +280,12 @@ def get_or_create_client(phone_number, name=None):
         cursor.close()
         conn.close()
 
-def get_client_by_id(id, name=None):
+def get_client_by_id(id):
     """Obtener cliente por id"""
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    try:get_db_connection
+    try:
         cursor.execute("SELECT * FROM cliente WHERE id = %s", (id,))
         client = cursor.fetchone()
         
@@ -464,8 +464,6 @@ def create_message(incoming_msg, client_name=None):
         logging.error(f"Error generando respuesta con ChatGPT: {e}")
         return f"Hola{' ' + client_name if client_name else ''}, gracias por contactarnos. En breve un asesor se comunicará contigo."
 
-# Funciones auxiliares para la base de datos (implementar en db.py)
-
 def get_productos_activos():
     """Obtiene todos los productos activos de la base de datos"""
     conn = get_db_connection()
@@ -480,7 +478,7 @@ def get_productos_activos():
         return client
     except Exception as e:
         conn.rollback()
-        logger.error(f"Error en get_client_by_id: {e}")
+        logger.error(f"Error en get_productos_activos: {e}")
         raise
     finally:
         cursor.close()
@@ -498,7 +496,7 @@ def get_categorias():
         return client
     except Exception as e:
         conn.rollback()
-        logger.error(f"Error en get_client_by_id: {e}")
+        logger.error(f"Error en get_categorias: {e}")
         raise
     finally:
         cursor.close()
@@ -518,7 +516,7 @@ def get_promociones_activas(fecha_actual):
         return client
     except Exception as e:
         conn.rollback()
-        logger.error(f"Error en get_client_by_id: {e}")
+        logger.error(f"Error en get_promociones_activas: {e}")
         raise
     finally:
         cursor.close()
@@ -539,7 +537,7 @@ def get_productos_en_promocion(promocion_id):
         return client
     except Exception as e:
         conn.rollback()
-        logger.error(f"Error en get_client_by_id: {e}")
+        logger.error(f"Error en get_productos_en_promocion: {e}")
         raise
     finally:
         cursor.close()
