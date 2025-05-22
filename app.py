@@ -457,8 +457,7 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         Eres un asistente virtual amable y profesional de {context['empresa']['nombre']}.
         
         Esta es la conversacion hasta ahora con el cliente llamado "{client_name}":
-        "{chr(10).join([f"{m['contenido_texto']} (is_bot: {m['isbot']})" for m in conversacion])}"
-
+        "{chr(10).join([f"{m['contenido_texto']} (hour: {m['fecha'].strftime('%H:%M')}) (is_bot: {m['isbot']})" for m in conversacion])}"
         Ahora, te ha enviado este mensaje: "{incoming_msg}"
         -------
         Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
@@ -482,7 +481,7 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         - Si pregunta por rango de precios o productos más económicos/caros, ayúdale con esa información
         - Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información
         - Si no puedes responder algo específico, ofrece contactar con un asesor humano
-        - Sigue el contexto de la conversación si es necesario
+        - Sigue el contexto de la conversación
         La respuesta debe ser breve (máximo 3-4 frases) pero informativa.
         """
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
