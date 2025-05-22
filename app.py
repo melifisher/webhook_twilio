@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import json
 import os
-import openai
+from openai import OpenAI
 from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
@@ -14,8 +14,7 @@ import urllib.parse
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-openai.api_key = OPENAI_API_KEY
+clientOpenAi = OpenAI()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -444,17 +443,13 @@ def create_message(incoming_msg, client_name=None):
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
         
         # Llamar a la API de ChatGPT
-        response = openai.ChatCompletion.create(
+        response = clientOpenAi.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Eres un asistente virtual de atención al cliente profesional y amigable."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=200,
-            temperature=0.7
+            messages=[{"role": "user", "content": prompt},
+                     {"role": "system", "content": "Eres un asistente virtual de atención al cliente profesional y amigable."}],
         )
         
-        message = response.choices[0].message["content"].strip()
+        message = response.choices[0].message.content.strip()
         
         return message
     
