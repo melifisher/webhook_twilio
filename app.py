@@ -301,10 +301,9 @@ def get_messages_by_conversation_id(id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("SELECT * FROM  mensaje WHERE conversacion_id = %s", (id,))
-        client = cursor.fetchone()
-        
-        return client
+        cursor.execute("SELECT * FROM mensaje WHERE conversacion_id = %s AND id NOT IN (SELECT id FROM mensaje WHERE conversacion_id = %s ORDER BY id DESC LIMIT 1)", (id, id))
+        mensajes = cursor.fetchall()  # ← AQUÍ el cambio importante
+        return mensajes
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_messages_by_conversation_id: {e}")
@@ -398,6 +397,9 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
     """
     try:
         conversacion = get_messages_by_conversation_id(conversacion_id)
+        if not isinstance(conversacion, list):
+            conversacion = [conversacion]
+
         productos = get_productos_activos()
         categorias = get_categorias()
         promociones = get_promociones_activas(datetime.now().date())
@@ -705,22 +707,6 @@ def webhook():
         client_id = get_or_create_client(wa_id)
         conversation_id = get_or_create_conversation(client_id)
         
-        # Crear una respuesta
-        if incoming_msg:
-            client = get_client_by_id(client_id)
-            new_message = create_message(incoming_msg, conversation_id, client['nombre'])
-            resp = MessagingResponse()
-            resp.message(new_message)
-            mensaje_id = store_message(
-                conversation_id=conversation_id,
-                message_type='text',
-                content_text=new_message,
-                is_bot=True
-            )
-        else:
-            resp = MessagingResponse()
-            resp.message("Mensaje recibido, gracias!")
-        
         # Verificar si hay medios
         num_media = int(request.form.get('NumMedia', '0'))
 
@@ -750,6 +736,22 @@ def webhook():
                 message_type='text',
                 content_text=incoming_msg
             )
+        
+        # Crear una respuesta
+        if incoming_msg:
+            client = get_client_by_id(client_id)
+            new_message = create_message(incoming_msg, conversation_id, client['nombre'])
+            resp = MessagingResponse()
+            resp.message(new_message)
+            mensaje_id = store_message(
+                conversation_id=conversation_id,
+                message_type='text',
+                content_text=new_message,
+                is_bot=True
+            )
+        else:
+            resp = MessagingResponse()
+            resp.message("Mensaje recibido, gracias!")
         
         return str(resp)
     
