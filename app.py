@@ -477,6 +477,7 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         INSTRUCCIONES:
         - Si el cliente pregunta por precios, proporciona la información actual disponible
         - Si pregunta por un producto específico, incluye descripción, precio y categoría
+        - Si pide más detalles del producto, tienes libertad de inventarte tallas, colores, etc.
         - Si pregunta por promociones, menciona las activas y cómo afectan los precios
         - Si pregunta por rango de precios o productos más económicos/caros, ayúdale con esa información
         - Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información
