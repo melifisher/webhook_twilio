@@ -473,9 +473,9 @@ def get_productos_activos():
         cursor.execute("""SELECT id, nombre, descripcion, categoria_id 
             FROM producto 
             WHERE activo = TRUE""")
-        client = cursor.fetchone()
+        clients = cursor.fetchall()
         
-        return client
+        return clients
     except Exception as e:
         conn.rollback()
         logger.error(f"Error en get_productos_activos: {e}")
@@ -491,7 +491,7 @@ def get_categorias():
     
     try:
         cursor.execute("""SELECT id, nombre, descripcion FROM categoria""")
-        client = cursor.fetchone()
+        client = cursor.fetchall()
         
         return client
     except Exception as e:
@@ -511,7 +511,7 @@ def get_promociones_activas(fecha_actual):
         cursor.execute("""SELECT id, nombre, descripcion, fecha_inicio, fecha_fin
             FROM promocion
             WHERE fecha_inicio <= %s AND fecha_fin >= %s""", (fecha_actual, fecha_actual))
-        client = cursor.fetchone()
+        client = cursor.fetchall()
         
         return client
     except Exception as e:
@@ -532,7 +532,7 @@ def get_productos_en_promocion(promocion_id):
         FROM producto p
         JOIN promo_producto pp ON p.id = pp.producto_id
         WHERE pp.promocion_id = %s AND p.activo = TRUE""", (promocion_id,))
-        client = cursor.fetchone()
+        client = cursor.fetchall()
         
         return client
     except Exception as e:
