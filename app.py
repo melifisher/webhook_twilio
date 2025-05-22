@@ -456,10 +456,10 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         prompt = f"""
         Eres un asistente virtual amable y profesional de {context['empresa']['nombre']}.
         
-        El cliente llamado "{client_name}", te ha enviado este mensaje: "{incoming_msg}"
-        
-        Esta es la conversacion  hasta ahora:
-        "{chr(10).join([f"{m['contenido_texto']} (ID: {m['id']})" for m in conversacion])}"
+        Esta es la conversacion hasta ahora con el cliente llamado "{client_name}":
+        "{chr(10).join([f"{m['contenido_texto']} (is_bot: {m['isbot']})" for m in conversacion])}"
+
+        Ahora, te ha enviado este mensaje: "{incoming_msg}"
         -------
         Responde de manera concisa, amigable y útil, utilizando la siguiente información sobre nuestra empresa:
         
