@@ -11,16 +11,12 @@ from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import urllib.parse
+from database_integration import setup_complete_system, test_conversation_flow
+from config import config
 
 load_dotenv()
 
 clientOpenAi = OpenAI()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_NAME = os.getenv('DB_NAME', 'topicos_2')
@@ -33,6 +29,21 @@ TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+bot, db_manager = setup_complete_system()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(config.files.log_file),
+        logging.StreamHandler()
+    ]
+)
+
+# Set specific log levels
+logging.getLogger('openai').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -371,18 +382,6 @@ def store_message(conversation_id, message_type, content_text=None,
         cursor.close()
         conn.close()
 
-def download_media(media_url):
-    """Descargar medios desde la API de Twilio"""
-    media_response = requests.get(
-        media_url,
-        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    )
-    if media_response.status_code == 200:
-        return media_response.content
-    else:
-        logger.error(f"Error al descargar medios: {media_response.status_code}")
-        return None
-
 def create_message(incoming_msg, conversacion_id,client_name=None):
     """
     Crea una respuesta personalizada usando la API de ChatGPT basada en el mensaje entrante
@@ -450,7 +449,7 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         # Crear string de productos con precios para el prompt
         productos_info = []
         for p in productos_con_precios:
-            precio_str = f"${p['precio']:.2f}" if p['precio'] else "Precio no disponible"
+            precio_str = f"Bs{p['precio']:.2f}" if p['precio'] else "Precio no disponible"
             productos_info.append(f"{p['nombre']} ({p['categoria']}) - {precio_str}")
         
         prompt = f"""
@@ -482,7 +481,7 @@ def create_message(incoming_msg, conversacion_id,client_name=None):
         - Si pregunta por rango de precios o productos más económicos/caros, ayúdale con esa información
         - Si su consulta no está relacionada con productos o servicios, ayúdale de manera general sin inventar información
         - Si no puedes responder algo específico, ofrece contactar con un asesor humano
-        - Sigue el contexto de la conversación
+        - Sigue la conversación
         La respuesta debe ser breve (máximo 3-4 frases) pero informativa.
         """
         logger.info(f"Prompt enviado a ChatGPT: {prompt}")
@@ -693,6 +692,7 @@ def get_productos_por_rango_precio(precio_min=None, precio_max=None):
     finally:
         cursor.close()
         conn.close()
+
 ############ ENDPOINTS ############
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -702,65 +702,16 @@ def webhook():
         wa_id = request.form.get('From', '').replace('whatsapp:', '')
         
         logger.info(f"Mensaje recibido de {wa_id}: {incoming_msg}")
+        bot.process_client_message(telefono, mensaje)
         
-        # Obtener o crear cliente y conversación
-        client_id = get_or_create_client(wa_id)
-        conversation_id = get_or_create_conversation(client_id)
-        
-        # Verificar si hay medios
-        num_media = int(request.form.get('NumMedia', '0'))
-
-        # Almacenar mensaje
-        if num_media > 0:
-            # Manejar mensaje con medios
-            for i in range(num_media):
-                media_url = request.form.get(f'MediaUrl{i}')
-                media_type = request.form.get(f'MediaContentType{i}')
-                
-                # Extraer nombre de archivo o usar uno predeterminado
-                media_filename = f"media_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                
-                # Almacenar mensaje con medios
-                mensaje_id = store_message(
-                    conversation_id=conversation_id,
-                    message_type='media',
-                    content_text=incoming_msg if incoming_msg else None,
-                    media_url=media_url,
-                    media_mimetype=media_type,
-                    media_filename=media_filename
-                )
-        else:
-            # Almacenar mensaje de texto
-            mensaje_id = store_message(
-                conversation_id=conversation_id,
-                message_type='text',
-                content_text=incoming_msg
-            )
-        
-        # Crear una respuesta
-        if incoming_msg:
-            client = get_client_by_id(client_id)
-            new_message = create_message(incoming_msg, conversation_id, client['nombre'])
+        if result['success']:
+            logger.info(f"Respuesta generada: {result['response']}")
             resp = MessagingResponse()
-            resp.message(new_message)
-            mensaje_id = store_message(
-                conversation_id=conversation_id,
-                message_type='text',
-                content_text=new_message,
-                is_bot=True
-            )
-        else:
-            resp = MessagingResponse()
-            resp.message("Mensaje recibido, gracias!")
-        
-        analisis = process_message_intent(
-            mensaje_id=mensaje_id,
-            message_text=incoming_msg,
-            cliente_id=client_id
-        )
+            resp.message(result['response'])
+        else :
+            logger.error(f"Error procesando mensaje: {result['error']}")
+            return jsonify({"error": result['error']}), 500
 
-        logger.info(f"Análisis de intenciones: {analisis}")
-        
         return str(resp)
     
     except Exception as e:

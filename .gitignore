@@ -1,0 +1,8 @@
+.env
+README.md
+prueba.py
+prueba2.py
+entorno/
+data/
+logs/
+__pycache__/

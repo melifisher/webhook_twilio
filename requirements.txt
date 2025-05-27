@@ -4,3 +4,8 @@ requests
 python-dotenv
 twilio
 openai
+numpy
+pandas
+faiss-cpu
+sentence-transformers
+flask
