@@ -1,13 +1,11 @@
-import psycopg2
 import numpy as np
 import json
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional
-import pandas as pd
 from dataclasses import dataclass
 import pickle
 import faiss
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 
 @dataclass

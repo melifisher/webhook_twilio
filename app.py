@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import urllib.parse
-from database_integration import setup_complete_system, test_conversation_flow
+from database_integration import setup_complete_system
 from config import config
 
 load_dotenv()
@@ -700,9 +700,10 @@ def webhook():
     try:
         incoming_msg = request.form.get('Body', '')
         wa_id = request.form.get('From', '').replace('whatsapp:', '')
+        nombre = request.form.get('ProfileName', None)
         
         logger.info(f"Mensaje recibido de {wa_id}: {incoming_msg}")
-        bot.process_client_message(telefono, mensaje)
+        bot.process_client_message(wa_id, incoming_msg, nombre)
         
         if result['success']:
             logger.info(f"Respuesta generada: {result['response']}")
@@ -894,7 +895,8 @@ def send_message():
         phone_number = data.get('phone_number')
         message_text = data.get('message')
         media_url = data.get('media_url')
-        
+        logger.info(f"Enviando mensaje a {phone_number}: {message_text}, media_url: {media_url}")
+    
         if not phone_number:
             return jsonify({"error": "Se requiere número de teléfono"}), 400
         
@@ -1492,7 +1494,6 @@ def send_bulk_personalized_messages():
     except Exception as e:
         logger.error(f"Error en envío masivo de mensajes: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 
 @app.route('/health', methods=['GET'])

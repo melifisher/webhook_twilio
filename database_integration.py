@@ -5,10 +5,7 @@ import json
 from config import config
 from dataclasses import dataclass
 from chatbot_system import EmbeddingGenerator, VectorStore
-import logging
 from openai import OpenAI
-
-logger = logging.getLogger(__name__)
 
 @dataclass
 class ProductInfo:
@@ -351,7 +348,7 @@ class ConversationalBot:
             return f"Lo siento, ha ocurrido un error. Por favor intenta de nuevo. Error: {str(e)}"
     
     def process_client_message(self, telefono: str, mensaje: str, nombre: str = None) -> Dict:
-        """Process message from client and return response with optional database storage"""
+        """Procesa el mensaje del cliente y devuelve una respuesta con almacenamiento opcional en la base de datos"""
         if not self.db_manager:
             return {
                 'success': False,
