@@ -703,7 +703,7 @@ def webhook():
         nombre = request.form.get('ProfileName', None)
         
         logger.info(f"Mensaje recibido de {wa_id}: {incoming_msg}")
-        bot.process_client_message(wa_id, incoming_msg, nombre)
+        result = bot.process_client_message(wa_id, incoming_msg, nombre)
         
         if result['success']:
             logger.info(f"Respuesta generada: {result['response']}")
@@ -711,6 +711,8 @@ def webhook():
             resp.message(result['response'])
         else :
             logger.error(f"Error procesando mensaje: {result['error']}")
+            resp = MessagingResponse()
+            resp.message('Gracias por tu mensaje, te contestaremos enseguida!')
             return jsonify({"error": result['error']}), 500
 
         return str(resp)
@@ -1503,4 +1505,4 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5050, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

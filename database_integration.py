@@ -6,6 +6,10 @@ from config import config
 from dataclasses import dataclass
 from chatbot_system import EmbeddingGenerator, VectorStore
 from openai import OpenAI
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ProductInfo:
@@ -210,6 +214,7 @@ class DatabaseManager:
         """, (tipo, contenido_texto, media_url, media_mimetype, media_filename,
               datetime.now(), is_bot, conversation_id))
         cursor.close()
+        logger.info(f"Message saved: {tipo}, is_bot: {is_bot}, conversation_id: {conversation_id}")
 
     def get_conversation_history(self, conversation_id: int, limit: int = 20) -> List[Dict]:
         cursor = self.connection.cursor()
@@ -378,6 +383,8 @@ class ConversationalBot:
             
             bot_response = self.generate_response(client_id, mensaje)
             
+            logger.info(f"Client {client_id} sent message: {mensaje}")
+
             self.db_manager.save_message(
                 conversation_id=conversation_id,
                 tipo="text",
@@ -394,6 +401,7 @@ class ConversationalBot:
         except Exception as e:
             error_msg = f"Error processing message: {str(e)}"
             print(error_msg)
+            logger.error(error_msg)
             return {
                 'success': False,
                 'error': error_msg,
