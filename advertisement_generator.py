@@ -7,6 +7,10 @@ import textwrap
 from datetime import datetime
 from chatbot_system import ProductInfo;
 from openai import OpenAI
+import tempfile
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AdvertisementGenerator:
     def __init__(self, vector_store, embedding_generator, db_manager=None):
@@ -309,10 +313,10 @@ class AdvertisementGenerator:
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
             temp_path = temp_file.name
             temp_file.close()
-            
+            product = self.dict_to_product_info(product_info)
             # Generate the advertisement
-            self.ad_generator.create_product_advertisement(
-                product=product_info,
+            self.create_product_advertisement(
+                product=product,
                 output_path=temp_path,
                 width=800,
                 height=600
@@ -323,6 +327,21 @@ class AdvertisementGenerator:
         except Exception as e:
             print(f"Error creating advertisement for client {client['nombre']}: {e}")
             return None
+
+    def dict_to_product_info(self, data: Dict) -> ProductInfo:
+        return ProductInfo(
+            id=data['id'],
+            nombre=data['nombre'],
+            descripcion=data['descripcion'],
+            categoria_id=data['categoria_id'],
+            categoria=data['categoria'],
+            categoria_descripcion=data.get('categoria_descripcion', ''),
+            precio_actual=data['precio_actual'],
+            lista_precios=data.get('lista_precios', ''),
+            promociones=data.get('promociones', []),
+            imagenes=data.get('imagenes', []),
+            activo=data.get('activo', True)
+        )
 
     def send_personalized_ads():
         """

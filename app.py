@@ -13,6 +13,8 @@ from twilio.twiml.messaging_response import MessagingResponse
 import urllib.parse
 from database_integration import setup_complete_system
 from config import config
+import cloudinary
+import cloudinary.uploader
 
 load_dotenv()
 
@@ -764,12 +766,12 @@ def analyze_message_intent():
         logger.error(f"Error en analyze_message_intent: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/analyze_client_intents', methods=['POST'])
+@app.route('/analyze_client_intents', methods=['GET'])
 def analyze_client_intents():
     """Analiza las intenciones de todas las conversaciones de un cliente"""
     try:
         data = request.json
-        cliente_id = data.get('cliente_id')
+        cliente_id = request.args.get('cliente_id')
         
         if not cliente_id:
             return jsonify({"error": "Se requiere ID de cliente"}), 400
@@ -918,15 +920,15 @@ def send_message():
             }
             media_mimetype = mime_map.get(extension, 'application/octet-stream')
         
-        store_message(
-            conversation_id=conversation_id,
-            message_type=message_type,
-            content_text=message_text,
-            media_url=media_url,
-            media_mimetype=media_mimetype,
-            media_filename=media_filename,
-            is_bot=True
-        )
+        # store_message(
+        #     conversation_id=conversation_id,
+        #     message_type=message_type,
+        #     content_text=message_text,
+        #     media_url=media_url,
+        #     media_mimetype=media_mimetype,
+        #     media_filename=media_filename,
+        #     is_bot=True
+        # )
         
         return jsonify({
             "success": True,
@@ -967,7 +969,7 @@ def send_add_messages():
         for cliente in clients:
             try:
                 # Get the top interest for this client
-                top_interest = cliente['interests'][0] if client['interests'] else None
+                top_interest = cliente['interests'][0] if cliente['interests'] else None
                 logger.info(f"top_interest: {top_interest}")
                 if not top_interest:
                     results['details'].append({
@@ -992,7 +994,6 @@ def send_add_messages():
                 
                 # Create personalized advertisement
                 ad_image_path = add_generator.create_personalized_ad(cliente, product_info)
-                
                 logger.info(f"ad_image_path: {ad_image_path}")
 
                 if not ad_image_path:
@@ -1012,14 +1013,17 @@ def send_add_messages():
                 
                 whatsapp_number = f"whatsapp:{cliente['telefono']}"
         
+                # Upload to Cloudinary
+                upload_result = cloudinary.uploader.upload(ad_image_path)
+                public_url = upload_result['secure_url']
+
                 # Enviar mensaje a través de Twilio
                 message_params = {
                     'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
                     'to': whatsapp_number,
                     'body': caption,
-                    'media_url': [ad_image_path]
+                    'media_url': [public_url]
                 }
-                # Enviar el mensaje
                 twilio_message = client.messages.create(**message_params)
                 logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
                 logger.info(twilio_message.sid)
@@ -1342,17 +1346,19 @@ def generate_personalized_message():
         # Obtener intereses del cliente
         cursor.execute("""
             SELECT i.*, 
-                   p.nombre as producto_nombre,
-                   c.nombre as categoria_nombre,
-                   pr.nombre as promocion_nombre
+                   i.entidad_nombre,
+                   i.tipo_interes,
+                   i.nivel_interes,
+                   i.fecha_creacion as fecha_interes
             FROM interes i
-            LEFT JOIN producto p ON i.producto_id = p.id
-            LEFT JOIN categoria c ON i.categoria_id = c.id
-            LEFT JOIN promocion pr ON i.promocion_id = pr.id
-            WHERE i.cliente_id = %s
-            ORDER BY i.nivel_interes DESC, i.fecha_interes DESC
+            WHERE i.conversacion_id IN (
+                SELECT id 
+                FROM conversacion 
+                WHERE cliente_id = %s
+            )
+            ORDER BY i.nivel_interes DESC, i.fecha_creacion DESC
             LIMIT 5
-        """, (cliente_id,))
+            """, (cliente_id,))
         
         intereses = []
         for row in cursor.fetchall():
