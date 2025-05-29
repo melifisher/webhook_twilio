@@ -13,6 +13,7 @@ class ProductInfo:
     id: int
     nombre: str
     descripcion: str
+    categoria_id: str
     categoria: str
     categoria_descripcion: str
     precio_actual: float
@@ -85,8 +86,10 @@ class EmbeddingGenerator:
                     'text': text,
                     'embedding': embedding,
                     'product_data': {
+                        'id': product.id,
                         'nombre': product.nombre,
                         'descripcion': product.descripcion,
+                        'categoria_id': product.categoria_id,
                         'categoria': product.categoria,
                         'precio_actual': product.precio_actual,
                         'promociones': product.promociones,

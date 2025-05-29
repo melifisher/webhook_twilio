@@ -763,8 +763,8 @@ def analyze_message_intent():
         logger.error(f"Error en analyze_message_intent: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/analyze_client_intent', methods=['POST'])
-def analyze_client_intent():
+@app.route('/analyze_client_intents', methods=['POST'])
+def analyze_client_intents():
     """Analiza las intenciones de todas las conversaciones de un cliente"""
     try:
         data = request.json
@@ -773,46 +773,12 @@ def analyze_client_intent():
         if not cliente_id:
             return jsonify({"error": "Se requiere ID de cliente"}), 400
         
-        # Obtener mensajes del cliente que no han sido analizados
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        
-        cursor.execute("""
-            SELECT m.id, m.contenido_texto
-            FROM mensaje m
-            JOIN conversacion c ON m.conversacion_id = c.id
-            WHERE c.cliente_id = %s
-            AND m.isbot = FALSE
-            AND m.contenido_texto IS NOT NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM interes i WHERE i.mensaje_id = m.id
-            )
-        """, (cliente_id,))
-        
-        messages = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        if not messages:
-            return jsonify({"message": "No hay mensajes nuevos para analizar"}), 200
-        
-        # Analizar cada mensaje
-        results = []
-        for message in messages:
-            result = process_message_intent(
-                mensaje_id=message['id'],
-                message_text=message['contenido_texto'],
-                cliente_id=cliente_id
-            )
-            results.append({
-                "mensaje_id": message['id'],
-                "result": result
-            })
+        intents = bot.process_client_conversation_intents(cliente_id)
         
         return jsonify({
             "success": True,
-            "messages_analyzed": len(results),
-            "results": results
+            "cant_intents": len(intents),
+            "intents": intents
         })
     
     except Exception as e:

@@ -4,25 +4,11 @@ from typing import Dict, List, Optional
 import json
 from config import config
 from dataclasses import dataclass
-from chatbot_system import EmbeddingGenerator, VectorStore
+from chatbot_system import EmbeddingGenerator, VectorStore, ProductInfo
 from openai import OpenAI
 import logging
 
-
 logger = logging.getLogger(__name__)
-
-@dataclass
-class ProductInfo:
-    id: int
-    nombre: str
-    descripcion: str
-    categoria: str
-    categoria_descripcion: str
-    precio_actual: float
-    lista_precios: str
-    promociones: List[Dict]
-    imagenes: List[str]
-    activo: bool
 
 class DatabaseManager:
     def __init__(self, db_config: Dict[str, str]):
@@ -55,6 +41,7 @@ class DatabaseManager:
             p.nombre,
             p.descripcion,
             p.activo,
+            c.id as categoria_id,
             c.nombre as categoria_nombre,
             c.descripcion as categoria_descripcion,
             lp.nombre as lista_precios_nombre,
@@ -81,18 +68,19 @@ class DatabaseManager:
                     'nombre': row[1],
                     'descripcion': row[2] or "",
                     'activo': row[3],
-                    'categoria': row[4] or "",
-                    'categoria_descripcion': row[5] or "",
+                    'categoria_id': row[4] or "",
+                    'categoria': row[5] or "",
+                    'categoria_descripcion': row[6] or "",
                     'precios': [],
                     'promociones': [],
                     'imagenes': []
                 }
-            if row[6]:
+            if row[7]:
                 precio_info = {
-                    'lista_precios': row[6],
-                    'valor': float(row[7]) if row[7] else 0,
-                    'fecha_inicio': row[8],
-                    'fecha_fin': row[9]
+                    'lista_precios': row[7],
+                    'valor': float(row[8]) if row[8] else 0,
+                    'fecha_inicio': row[9],
+                    'fecha_fin': row[10]
                 }
                 if precio_info not in products_dict[product_id]['precios']:
                     products_dict[product_id]['precios'].append(precio_info)
@@ -118,6 +106,7 @@ class DatabaseManager:
                 id=data['id'],
                 nombre=data['nombre'],
                 descripcion=data['descripcion'],
+                categoria_id=data['categoria'],
                 categoria=data['categoria'],
                 categoria_descripcion=data['categoria_descripcion'],
                 precio_actual=current_price,
@@ -132,6 +121,7 @@ class DatabaseManager:
 
     def _get_product_promotions(self, product_id: int) -> List[Dict]:
         query = """ SELECT 
+                pr.id,
                 pr.nombre,
                 pr.descripcion,
                 pr.fecha_inicio,
@@ -147,11 +137,12 @@ class DatabaseManager:
         results = cursor.fetchall()
         cursor.close()
         return [{
-            'nombre': row[0],
-            'descripcion': row[1] or "",
-            'fecha_inicio': row[2],
-            'fecha_fin': row[3],
-            'descuento_porcentaje': float(row[4]) if row[4] else 0
+            'id': row[0],
+            'nombre': row[1],
+            'descripcion': row[2] or "",
+            'fecha_inicio': row[3],
+            'fecha_fin': row[4],
+            'descuento_porcentaje': float(row[5]) if row[5] else 0
         } for row in results]
 
     def _get_product_images(self, product_id: int) -> List[str]:
@@ -254,6 +245,54 @@ class DatabaseManager:
             'descripcion': row[2],
             'message_count': row[3]
         } for row in results]
+    
+    def get_messages_for_analize(self, cliente_id) -> List[Dict]:
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT m.conversacion_id, m.id as mensaje_id, m.contenido_texto, m.isbot
+            FROM mensaje m
+            JOIN conversacion c ON m.conversacion_id = c.id
+            WHERE c.cliente_id = %s
+            AND m.contenido_texto IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM interes i WHERE i.conversacion_id = c.id
+            )
+        """, (cliente_id,))
+        messages = cursor.fetchall()
+        cursor.close()
+        if not messages:
+            return []
+        
+        return messages
+    
+    def save_conversation_intents(self, intents):
+        cursor = self.connection.cursor()
+        try:
+            for intent in intents:
+                cursor.execute("""
+                    INSERT INTO interes (conversacion_id, tipo_interes, entidad_id, entidad_nombre, nivel_interes, contexto, fecha_creacion)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT DO NOTHING
+                    RETURNING id
+                """, (
+                    intent['conversacion_id'],
+                    intent['tipo_interes'], 
+                    intent['entidad_id'],
+                    intent.get('entidad_nombre', ''),
+                    intent['nivel_interes'],
+                    intent.get('contexto', '')
+                ))
+                result = cursor.fetchone()
+                if result:
+                    logger.info(f"Interés almacenado con ID: {result[0]}")
+                else:
+                    logger.info("No se insertó el interés (posible duplicado)")
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error en save_conversation_intents: {e}")
+            return False
+        
 
 class ConversationalBot:
     def __init__(self, vector_store, embedding_generator, db_manager=None):
@@ -351,7 +390,7 @@ class ConversationalBot:
             return bot_response
         except Exception as e:
             return f"Lo siento, ha ocurrido un error. Por favor intenta de nuevo. Error: {str(e)}"
-    
+
     def process_client_message(self, telefono: str, mensaje: str, nombre: str = None) -> Dict:
         """Procesa el mensaje del cliente y devuelve una respuesta con almacenamiento opcional en la base de datos"""
         if not self.db_manager:
@@ -407,6 +446,211 @@ class ConversationalBot:
                 'error': error_msg,
                 'response': "Lo siento, ha ocurrido un error procesando tu mensaje."
             }
+
+    def analyze_conversation_intent(self, cliente_id: int, k: int = 15):
+        """
+        Analiza las intenciones de todas las conversaciones de un cliente
+        que aún no han sido analizadas
+        """
+        try:
+            # Obtener mensajes sin analizar
+            messages = self.db_manager.get_messages_for_analize(cliente_id)
+            # logger.info(f"messages: {messages}")
+            if not messages:
+                return []
+            
+            # Agrupar mensajes por conversación
+            conversations = {}
+            for msg in messages:
+                conv_id = msg[0]  # conversacion_id
+                if conv_id not in conversations:
+                    conversations[conv_id] = []
+                conversations[conv_id].append({
+                    'mensaje_id': msg[1],
+                    'contenido': msg[2],
+                    'isbot': msg[3]
+                })
+            
+            all_intents = []
+            
+            # Analizar cada conversación
+            for conversacion_id, msgs in conversations.items():
+                # Combinar todos los mensajes del usuario (no bot) de la conversación
+                user_messages = [msg['contenido'] for msg in msgs if not msg['isbot']]
+                
+                if not user_messages:
+                    continue
+                
+                # Crear un texto combinado de la conversación
+                conversation_text = " ".join(user_messages)
+                
+                # Obtener productos relevantes usando embeddings
+                relevant_products = self.get_relevant_products(conversation_text, k)
+                
+                if not relevant_products:
+                    continue
+                
+                # Preparar información de productos relevantes
+                productos_info = []
+                for result in relevant_products:
+                    product = result['metadata']['product_data']
+                   
+                    info = {
+                        'id': product['id'],
+                        'nombre': product['nombre'],
+                        'descripcion': product.get('descripcion', ''),
+                        'categoria_id': product.get('categoria_id', ''),
+                        'categoria': product.get('categoria', ''),
+                        'precio': product.get('precio_actual', 0),
+                        'promociones': product.get('promociones', [])
+                    }
+                    productos_info.append(info)
+                
+                # Construir contexto de la conversación completa
+                conversation_context = []
+                for msg in msgs:
+                    role = "Bot" if msg['isbot'] else "Cliente"
+                    conversation_context.append(f"{role}: {msg['contenido']}")
+                
+                conversation_str = "\n".join(conversation_context)
+                
+                # Construir string de productos para el prompt
+                productos_str = "\n".join([
+                    f"ID: {p['id']}, Nombre: {p['nombre']}, Descripción: {p['descripcion']}, Categoría: {p['categoria']}" 
+                    for p in productos_info
+                ])
+                
+                # Extraer categorías únicas y promociones
+                categorias_unicas = {}
+                promociones_info = []
+                for p in productos_info:
+                    if p['categoria_id'] and p['categoria_id'] not in categorias_unicas:
+                        categorias_unicas[p['categoria_id']] = p['categoria']
+                    if p['promociones']:
+                        for promo in p['promociones']:
+                            if promo not in promociones_info:
+                                promociones_info.append(promo)
+            
+                logger.info(f"categorias_unicas: {categorias_unicas}")
+                logger.info(f"promociones_info: {promociones_info}")
+
+                categorias_str = "\n".join([
+                    f"Id: {cat_id}, Nombre: {cat_name}" for cat_id, cat_name in categorias_unicas.items()
+                ])
+                
+                promociones_str = "\n".join([
+                    f"Id: {promo.get('id','')}, Nombre: {promo.get('nombre', '')}, Descuento: {promo.get('descuento_porcentaje', 0)}%" 
+                    for promo in promociones_info
+                ])
+                
+                # Preparar el prompt para OpenAI
+                prompt = f"""
+                Analiza la siguiente conversación completa entre un cliente y un bot de ventas para detectar intenciones de interés en productos, categorías o promociones.
+                
+                CONVERSACIÓN COMPLETA:
+                {conversation_str}
+                
+                Productos relevantes encontrados:
+                {productos_str}
+                
+                Categorías disponibles:
+                {categorias_str}
+                
+                Promociones activas:
+                {promociones_str}
+                
+                Analiza toda la conversación en conjunto para detectar patrones de interés. Considera:
+                - Productos específicos mencionados o preguntados directamente por el cliente
+                - Categorías de interés mostradas
+                - Promociones consultadas
+                - Intenciones implícitas basadas en el contexto completo
+                
+                Responde con un JSON que contenga un array de intereses detectados, donde cada interés debe incluir:
+                1. tipo_interes: "producto", "categoria" o "promocion"
+                2. entidad_id: el ID numérico del producto, categoría o promoción
+                3. nivel_interes: un valor entre 0 y 1 que indique el nivel de confianza en el interés basado en toda la conversación
+                4. entidad_nombre: el nombre del producto, categoría o promoción
+                5. contexto: una breve explicación de por qué se detectó este interés
+                
+                Si no se detecta interés, devuelve un array vacío.
+                Ejemplo de formato de respuesta:
+                {{"intereses": [
+                    {{"tipo_interes": "producto", "entidad_id": 5, "nivel_interes": 0.9, "entidad_nombre": "Libro de Python", "contexto": "Cliente preguntó específicamente por libros de programación de Python"}},
+                    {{"tipo_interes": "categoria", "entidad_id": 10, "entidad_nombre": "Tecnología", "nivel_interes": 0.7, "contexto": "Mostró interés general en libros de tecnología"}}
+                ]}}
+                
+                Solo responde con el objeto JSON, sin texto adicional.
+                """
+                logger.info(f"prompt: {prompt}")
+                # Llamada a la API de OpenAI
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Eres un sistema de análisis de intenciones para un e-commerce de libros. Analiza conversaciones completas para detectar patrones de interés."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=1000
+                )
+                
+                # Extraer y procesar la respuesta
+                result_text = response.choices[0].message.content.strip()
+                
+                try:
+                    import re
+                    import json
+                    
+                    # Buscar el JSON en la respuesta
+                    json_match = re.search(r'({[\s\S]*})', result_text)
+                    if json_match:
+                        result_text = json_match.group(1)
+                    
+                    result = json.loads(result_text)
+                    
+                    # Verificar formato y agregar conversacion_id
+                    intents = result.get('intereses', [])
+                    if isinstance(result, list):
+                        intents = result
+                    
+                    # Agregar conversacion_id a cada interés
+                    for intent in intents:
+                        intent['conversacion_id'] = conversacion_id
+                    
+                    all_intents.extend(intents)
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error al decodificar JSON de OpenAI para conversación {conversacion_id}: {e}, respuesta: {result_text}")
+                    continue
+            
+            return all_intents
+            
+        except Exception as e:
+            logger.error(f"Error en análisis de intenciones de conversación: {e}")
+            return []
+
+    def process_client_conversation_intents(self, cliente_id: int):
+        """
+        Procesa y guarda los intereses de todas las conversaciones de un cliente
+        """
+        try:
+            # Analizar intenciones
+            intents = self.analyze_conversation_intent(cliente_id)
+            
+            if not intents:
+                logger.info(f"No se encontraron intenciones para el cliente {cliente_id}")
+                return []
+            
+            # Guardar en base de datos
+            if self.db_manager.save_conversation_intents(intents):
+                logger.info(f"Se guardaron {len(intents)} intenciones para el cliente {cliente_id}")
+                return intents
+            else:
+                logger.error(f"Error al guardar intenciones para el cliente {cliente_id}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error procesando intenciones del cliente {cliente_id}: {e}")
+            return []
 
 # pa pruebas
 class WhatsAppBotAPI:
