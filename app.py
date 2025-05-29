@@ -968,7 +968,6 @@ def send_add_messages():
 
         for cliente in clients:
             try:
-                # Get the top interest for this client
                 top_interest = cliente['interests'][0] if cliente['interests'] else None
                 logger.info(f"top_interest: {top_interest}")
                 if not top_interest:
@@ -1013,10 +1012,7 @@ def send_add_messages():
                 
                 whatsapp_number = f"whatsapp:{cliente['telefono']}"
         
-                # Upload to Cloudinary
-                upload_result = cloudinary.uploader.upload(ad_image_path)
-                public_url = upload_result['secure_url']
-
+                
                 # Enviar mensaje a través de Twilio
                 message_params = {
                     'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
