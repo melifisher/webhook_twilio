@@ -30,7 +30,8 @@ TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-bot, db_manager = setup_complete_system()
+bot, db_manager, add_generator = setup_complete_system()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -931,6 +932,121 @@ def send_message():
             "success": True,
             "message": "Mensaje enviado exitosamente",
             "twilio_sid": twilio_message.sid
+        })
+    
+    except Exception as e:
+        logger.error(f"Error al enviar mensaje: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/send_adds', methods=['GET'])
+def send_add_messages():
+    """Enviar adds a clientes por WhatsApp"""
+    try:
+        clients = db_manager.get_clients_with_interests(
+            min_interest_level=0.6,
+            days_back=10
+        )
+
+        logger.info(f"clients: {clients}")
+
+        if not clients:
+            logger.info("No clients found with specified interest criteria")
+            return jsonify({
+                'success': True,
+                'message': 'No clients found with specified interest criteria',
+                'sent_count': 0
+            })
+            
+        results = {
+            'total_clients': len(clients),
+            'successful_sends': 0,
+            'failed_sends': 0,
+            'details': []
+        }
+
+        for cliente in clients:
+            try:
+                # Get the top interest for this client
+                top_interest = cliente['interests'][0] if client['interests'] else None
+                logger.info(f"top_interest: {top_interest}")
+                if not top_interest:
+                    results['details'].append({
+                        'client': cliente['nombre'],
+                        'phone': cliente['telefono'],
+                        'status': 'skipped',
+                        'reason': 'No interests found'
+                    })
+                    continue
+                
+                product_info = add_generator.get_product_for_interest(top_interest)
+                logger.info(f"product_info: {product_info}")
+
+                if not product_info:
+                    results['details'].append({
+                        'client': cliente['nombre'],
+                        'phone': cliente['telefono'],
+                        'status': 'skipped',
+                        'reason': 'No matching product found'
+                    })
+                    continue
+                
+                # Create personalized advertisement
+                ad_image_path = add_generator.create_personalized_ad(cliente, product_info)
+                
+                logger.info(f"ad_image_path: {ad_image_path}")
+
+                if not ad_image_path:
+                    results['details'].append({
+                        'client': cliente['nombre'],
+                        'phone': cliente['telefono'],
+                        'status': 'failed',
+                        'reason': 'Failed to create advertisement'
+                    })
+                    results['failed_sends'] += 1
+                    continue
+                
+                caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
+                caption += f"Vimos que te interesa {top_interest['entidad_nombre']}. "
+                caption += f"¡Tenemos una oferta especial para ti!\n\n"
+                caption += f"💝 ¡No te pierdas esta oportunidad!"
+                
+                whatsapp_number = f"whatsapp:{cliente['telefono']}"
+        
+                # Enviar mensaje a través de Twilio
+                message_params = {
+                    'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                    'to': whatsapp_number,
+                    'body': caption,
+                    'media_url': [ad_image_path]
+                }
+                # Enviar el mensaje
+                twilio_message = client.messages.create(**message_params)
+                logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
+                logger.info(twilio_message.sid)
+
+                results['successful_sends'] += 1
+
+                # Clean up temporary file
+                try:
+                    os.unlink(ad_image_path)
+                except:
+                    pass
+            except Exception as e:
+                logger.error(f"Error enviando mensaje a {cliente.get('nombre', 'Unknown')}: {e}")
+                results['failed_sends'] += 1
+                results['details'].append({
+                    'client': cliente.get('nombre', 'Unknown'),
+                    'phone': cliente.get('telefono', 'Unknown'),
+                    'status': 'error',
+                    'reason': str(e)
+                })
+        
+
+        logger.info(f"results: {results}")
+        return jsonify({
+            'success': True,
+            'message': f"Processed {len(clients)} clients",
+            'results': results
         })
     
     except Exception as e:

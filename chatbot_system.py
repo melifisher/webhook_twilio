@@ -13,7 +13,7 @@ class ProductInfo:
     id: int
     nombre: str
     descripcion: str
-    categoria_id: str
+    categoria_id: int
     categoria: str
     categoria_descripcion: str
     precio_actual: float

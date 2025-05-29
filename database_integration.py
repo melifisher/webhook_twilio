@@ -1,10 +1,10 @@
 import psycopg2
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 import json
 from config import config
-from dataclasses import dataclass
-from chatbot_system import EmbeddingGenerator, VectorStore, ProductInfo
+from chatbot_system import EmbeddingGenerator, VectorStore, ProductInfo;
+from advertisement_generator import AdvertisementGenerator;
 from openai import OpenAI
 import logging
 
@@ -68,7 +68,7 @@ class DatabaseManager:
                     'nombre': row[1],
                     'descripcion': row[2] or "",
                     'activo': row[3],
-                    'categoria_id': row[4] or "",
+                    'categoria_id': row[4] or 0,
                     'categoria': row[5] or "",
                     'categoria_descripcion': row[6] or "",
                     'precios': [],
@@ -106,7 +106,7 @@ class DatabaseManager:
                 id=data['id'],
                 nombre=data['nombre'],
                 descripcion=data['descripcion'],
-                categoria_id=data['categoria'],
+                categoria_id=data['categoria_id'],
                 categoria=data['categoria'],
                 categoria_descripcion=data['categoria_descripcion'],
                 precio_actual=current_price,
@@ -292,8 +292,64 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error en save_conversation_intents: {e}")
             return False
+    
+    def get_clients_with_interests(self, min_interest_level: float = 0.5, 
+                                 days_back: int = 30) -> List[Dict]:
+        """
+        Get clients with their top interests from the last N days
+        """
+        cursor = self.connection.cursor()
+        query = """
+        SELECT DISTINCT
+            c.id as cliente_id,
+            c.telefono,
+            c.nombre,
+            c.correo,
+            i.tipo_interes,
+            i.entidad_id,
+            i.entidad_nombre,
+            i.nivel_interes,
+            i.contexto,
+            ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY i.nivel_interes DESC) as rn
+        FROM cliente c
+        JOIN conversacion conv ON c.id = conv.cliente_id
+        JOIN interes i ON conv.id = i.conversacion_id
+        WHERE i.nivel_interes >= %s
+        AND i.fecha_creacion >= %s
+        ORDER BY c.id, i.nivel_interes DESC
+        """
         
-
+        cutoff_date = datetime.now() - timedelta(days=days_back)
+        
+        cursor.execute(query, (min_interest_level, cutoff_date))
+        results = cursor.fetchall()
+        cursor.close()
+        logger.info(f"clientes result: {results}")
+        # Group by client and get top 3 interests per client
+        clients_dict = {}
+        for row in results:
+            client_id = row[0]
+            if client_id not in clients_dict:
+                clients_dict[client_id] = {
+                    'cliente_id': client_id,
+                    'telefono': row[1],
+                    'nombre': row[2],
+                    'correo': row[3],
+                    'interests': []
+                }
+            
+            # Add interest if we have less than 3 for this client
+            if len(clients_dict[client_id]['interests']) < 3:
+                clients_dict[client_id]['interests'].append({
+                    'tipo_interes': row[4],
+                    'entidad_id': row[5],
+                    'entidad_nombre': row[6],
+                    'nivel_interes': float(row[7]),
+                    'contexto': row[8]
+                })
+        
+        return list(clients_dict.values())
+    
 class ConversationalBot:
     def __init__(self, vector_store, embedding_generator, db_manager=None):
         self.client = OpenAI()
@@ -499,7 +555,7 @@ class ConversationalBot:
                         'id': product['id'],
                         'nombre': product['nombre'],
                         'descripcion': product.get('descripcion', ''),
-                        'categoria_id': product.get('categoria_id', ''),
+                        'categoria_id': product['categoria_id'],
                         'categoria': product.get('categoria', ''),
                         'precio': product.get('precio_actual', 0),
                         'promociones': product.get('promociones', [])
@@ -522,26 +578,34 @@ class ConversationalBot:
                 
                 # Extraer categorías únicas y promociones
                 categorias_unicas = {}
-                promociones_info = []
+                promociones_unicas = {}
+                prods_promo = {}
+                categorias_str = ""
                 for p in productos_info:
                     if p['categoria_id'] and p['categoria_id'] not in categorias_unicas:
                         categorias_unicas[p['categoria_id']] = p['categoria']
+                        categorias_str += f"Id: {p['categoria_id']}, Nombre: {p['categoria']}"
                     if p['promociones']:
                         for promo in p['promociones']:
-                            if promo not in promociones_info:
-                                promociones_info.append(promo)
-            
+                            if prods_promo.get(promo['id']) is None:
+                                prods_promo[promo['id']] = f"Producto: {p['nombre']} - {promo.get('descuento_porcentaje', 0)}%, "
+                            else:
+                                prods_promo[promo['id']] += f"Producto: {p['nombre']} - {promo.get('descuento_porcentaje', 0)}%, "
+                            promociones_unicas[promo['id']] = {
+                                'id': promo['id'],
+                                'nombre': promo['nombre'],
+                                'productos_descuento': prods_promo[promo['id']],
+                                'descripcion': promo.get('descripcion', '')
+                            }
                 logger.info(f"categorias_unicas: {categorias_unicas}")
-                logger.info(f"promociones_info: {promociones_info}")
+                logger.info(f"promociones_unicas: {promociones_unicas}")
 
-                categorias_str = "\n".join([
-                    f"Id: {cat_id}, Nombre: {cat_name}" for cat_id, cat_name in categorias_unicas.items()
+                promociones_str = "\n".join([
+                    f"Id: {promo['id']}, Nombre: {promo.get('nombre', '')}, Descripción: {promo.get('descripcion', '')}, Descuentos: {promo.get('productos_descuento', '')}"
+                    for promo in promociones_unicas.values()
                 ])
                 
-                promociones_str = "\n".join([
-                    f"Id: {promo.get('id','')}, Nombre: {promo.get('nombre', '')}, Descuento: {promo.get('descuento_porcentaje', 0)}%" 
-                    for promo in promociones_info
-                ])
+                
                 
                 # Preparar el prompt para OpenAI
                 prompt = f"""
@@ -718,10 +782,11 @@ def setup_complete_system():
         # 4. Create enhanced bot
         bot = ConversationalBot(vector_store, embedding_gen, db_manager)
 
-        # api_handler = WhatsAppBotAPI(bot)
+        # 5. 
+        add_generator = AdvertisementGenerator(vector_store, embedding_gen, db_manager)
 
         print("System setup complete!")
-        return bot, db_manager
+        return bot, db_manager, add_generator
         # api_handler, 
         
     except Exception as e:
