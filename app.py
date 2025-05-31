@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import urllib.parse
-from database_integration import setup_complete_system
+from database_integration import setup_complete_system, update_product_embeddings
 from config import config
 import cloudinary
 import cloudinary.uploader
@@ -766,11 +766,25 @@ def analyze_message_intent():
         logger.error(f"Error en analyze_message_intent: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/update_embeddings', methods=['GET'])
+def update_embeddings():
+    """actualiza los embeddings de la base de datos"""
+    try:
+        update_product_embeddings()
+
+        return jsonify({
+            "success": True
+        })
+    
+    except Exception as e:
+        logger.error(f"Error en update_embeddings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/analyze_client_intents', methods=['GET'])
 def analyze_client_intents():
     """Analiza las intenciones de todas las conversaciones de un cliente"""
     try:
-        data = request.json
         cliente_id = request.args.get('cliente_id')
         
         if not cliente_id:
