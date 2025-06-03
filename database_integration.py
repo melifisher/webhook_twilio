@@ -269,28 +269,75 @@ class DatabaseManager:
         cursor = self.connection.cursor()
         try:
             for intent in intents:
+                # First check if this exact interest already exists for this client
                 cursor.execute("""
-                    INSERT INTO interes (conversacion_id, tipo_interes, entidad_id, entidad_nombre, nivel_interes, contexto, fecha_creacion)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT DO NOTHING
-                    RETURNING id
+                    SELECT COUNT(*) FROM interes i
+                    JOIN conversacion c ON i.conversacion_id = c.id
+                    WHERE c.cliente_id = (
+                        SELECT cliente_id FROM conversacion WHERE id = %s
+                    )
+                    AND i.tipo_interes = %s 
+                    AND i.entidad_id = %s
                 """, (
                     intent['conversacion_id'],
-                    intent['tipo_interes'], 
-                    intent['entidad_id'],
-                    intent.get('entidad_nombre', ''),
-                    intent['nivel_interes'],
-                    intent.get('contexto', '')
+                    intent['tipo_interes'],
+                    intent['entidad_id']
                 ))
-                result = cursor.fetchone()
-                if result:
-                    logger.info(f"Interés almacenado con ID: {result[0]}")
+            
+                existing_count = cursor.fetchone()[0]
+            
+                if existing_count == 0:
+                    # Only insert if this interest doesn't exist for this client
+                    cursor.execute("""
+                        INSERT INTO interes (conversacion_id, tipo_interes, entidad_id, entidad_nombre, nivel_interes, contexto, fecha_creacion)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        RETURNING id
+                    """, (
+                        intent['conversacion_id'],
+                        intent['tipo_interes'], 
+                        intent['entidad_id'],
+                        intent.get('entidad_nombre', ''),
+                        intent['nivel_interes'],
+                        intent.get('contexto', '')
+                    ))
+                    result = cursor.fetchone()
+                    if result:
+                        logger.info(f"Interés almacenado con ID: {result[0]}")
                 else:
-                    logger.info("No se insertó el interés (posible duplicado)")
+                    # Optionally update the existing interest with higher confidence level
+                    cursor.execute("""
+                        UPDATE interes SET 
+                            nivel_interes = GREATEST(nivel_interes, %s),
+                            contexto = CASE 
+                                WHEN %s > nivel_interes THEN %s 
+                                ELSE contexto 
+                            END,
+                            fecha_creacion = NOW()
+                        WHERE id IN (
+                            SELECT i.id FROM interes i
+                            JOIN conversacion c ON i.conversacion_id = c.id
+                            WHERE c.cliente_id = (
+                                SELECT cliente_id FROM conversacion WHERE id = %s
+                            )
+                            AND i.tipo_interes = %s 
+                            AND i.entidad_id = %s
+                            LIMIT 1
+                        )
+                    """, (
+                        intent['nivel_interes'],
+                        intent['nivel_interes'],
+                        intent.get('contexto', ''),
+                        intent['conversacion_id'],
+                        intent['tipo_interes'],
+                        intent['entidad_id']
+                    ))
+                    logger.info(f"Interés actualizado para cliente - tipo: {intent['tipo_interes']}, entidad: {intent['entidad_id']}")
+        
             cursor.close()
             return True
         except Exception as e:
             logger.error(f"Error en save_conversation_intents: {e}")
+            cursor.close()
             return False
     
     def get_clients_with_interests(self, min_interest_level: float = 0.5, 
@@ -305,6 +352,7 @@ class DatabaseManager:
             c.telefono,
             c.nombre,
             c.correo,
+            i.id,
             i.tipo_interes,
             i.entidad_id,
             i.entidad_nombre,
@@ -316,6 +364,7 @@ class DatabaseManager:
         JOIN interes i ON conv.id = i.conversacion_id
         WHERE i.nivel_interes >= %s
         AND i.fecha_creacion >= %s
+        AND i.procesado = FALSE
         ORDER BY c.id, i.nivel_interes DESC
         """
         
@@ -341,15 +390,100 @@ class DatabaseManager:
             # Add interest if we have less than 3 for this client
             if len(clients_dict[client_id]['interests']) < 3:
                 clients_dict[client_id]['interests'].append({
-                    'tipo_interes': row[4],
-                    'entidad_id': row[5],
-                    'entidad_nombre': row[6],
-                    'nivel_interes': float(row[7]),
-                    'contexto': row[8]
+                    'id': row[4],
+                    'tipo_interes': row[5],
+                    'entidad_id': row[6],
+                    'entidad_nombre': row[7],
+                    'nivel_interes': float(row[8]),
+                    'contexto': row[9]
                 })
         
         return list(clients_dict.values())
     
+    def get_products_by_category(self, category_name, limit: int = 6) -> List[Dict]:
+        cursor = self.connection.cursor()
+        cursor.execute("""
+        SELECT DISTINCT ON (p.id)
+            p.id,
+            p.nombre,
+            p.descripcion,
+            p.categoria_id,
+            p.activo,
+            c.nombre as categoria,
+            c.descripcion as categoria_descripcion,
+            -- Current price subquery
+            (SELECT pr.valor 
+             FROM precio pr 
+             WHERE pr.producto_id = p.id 
+             AND pr.fecha_inicio <= CURRENT_DATE 
+             AND (pr.fecha_fin IS NULL OR pr.fecha_fin >= CURRENT_DATE)
+             ORDER BY pr.fecha_inicio DESC 
+             LIMIT 1) as precio_actual,
+            -- Current price list
+            (SELECT lp.nombre 
+             FROM precio pr 
+             JOIN lista_precios lp ON pr.lista_precios_id = lp.id
+             WHERE pr.producto_id = p.id 
+             AND pr.fecha_inicio <= CURRENT_DATE 
+             AND (pr.fecha_fin IS NULL OR pr.fecha_fin >= CURRENT_DATE)
+             ORDER BY pr.fecha_inicio DESC 
+             LIMIT 1) as lista_precios,
+            -- Active promotions as JSON array
+            (SELECT COALESCE(JSON_AGG(
+                JSON_BUILD_OBJECT(
+                    'id', prom.id,
+                    'nombre', prom.nombre,
+                    'descripcion', prom.descripcion,
+                    'descuento_porcentaje', pp.descuento_porcentaje,
+                    'fecha_inicio', prom.fecha_inicio,
+                    'fecha_fin', prom.fecha_fin
+                )
+            ), '[]'::json)
+            FROM promocion prom
+            JOIN promo_producto pp ON prom.id = pp.promocion_id
+            WHERE pp.producto_id = p.id
+            AND prom.fecha_inicio <= CURRENT_DATE
+            AND prom.fecha_fin >= CURRENT_DATE) as promociones,
+            -- Images as JSON array
+            (SELECT COALESCE(JSON_AGG(
+                JSON_BUILD_OBJECT(
+                    'id', img.id,
+                    'url', img.url,
+                    'descripcion', img.descripcion
+                )
+            ), '[]'::json)
+            FROM imagen img
+            WHERE img.producto_id = p.id) as imagenes
+        FROM producto p
+        INNER JOIN categoria c ON p.categoria_id = c.id
+        WHERE LOWER(c.nombre) LIKE LOWER(%s)
+        AND p.activo = TRUE
+        ORDER BY p.id, p.nombre
+        LIMIT %s
+        """, (f'%{category_name}%', limit))
+
+        products = cursor.fetchall()
+        column_names = [desc[0] for desc in cursor.description]
+        cursor.close()
+
+        logger.info(f"Found {len(products)} products in category '{category_name}'")
+
+        # 🔁 Convertir a lista de diccionarios
+        return [dict(zip(column_names, row)) for row in products]
+    
+    def interes_procesado(self, interes_id):
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            UPDATE interes
+            SET procesado = TRUE
+            WHERE id = %s
+        """, (interes_id,))
+
+        cursor.close()
+        
+        logger.info(f"Se ha puento en procesado el interes: {interes_id}")
+    
+
 class ConversationalBot:
     def __init__(self, vector_store, embedding_generator, db_manager=None):
         self.client = OpenAI()
@@ -584,7 +718,7 @@ class ConversationalBot:
                 for p in productos_info:
                     if p['categoria_id'] and p['categoria_id'] not in categorias_unicas:
                         categorias_unicas[p['categoria_id']] = p['categoria']
-                        categorias_str += f"Id: {p['categoria_id']}, Nombre: {p['categoria']}"
+                        categorias_str += f"Id: {p['categoria_id']}, Nombre: {p['categoria']}.\n"
                     if p['promociones']:
                         for promo in p['promociones']:
                             if prods_promo.get(promo['id']) is None:
@@ -601,50 +735,49 @@ class ConversationalBot:
                 logger.info(f"promociones_unicas: {promociones_unicas}")
 
                 promociones_str = "\n".join([
-                    f"Id: {promo['id']}, Nombre: {promo.get('nombre', '')}, Descripción: {promo.get('descripcion', '')}, Descuentos: {promo.get('productos_descuento', '')}"
+                    f"Id: {promo['id']}, Nombre: {promo.get('nombre', '')}, Descripción: {promo.get('descripcion', '')}, Descuentos: {promo.get('productos_descuento', '')}.\n"
                     for promo in promociones_unicas.values()
                 ])
                 
                 
                 
                 # Preparar el prompt para OpenAI
-                prompt = f"""
-                Analiza la siguiente conversación completa entre un cliente y un bot de ventas para detectar intenciones de interés en productos, categorías o promociones.
-                
-                CONVERSACIÓN COMPLETA:
-                {conversation_str}
-                
-                Productos relevantes encontrados:
-                {productos_str}
-                
-                Categorías disponibles:
-                {categorias_str}
-                
-                Promociones activas:
-                {promociones_str}
-                
-                Analiza toda la conversación en conjunto para detectar patrones de interés. Considera:
-                - Productos específicos mencionados o preguntados directamente por el cliente
-                - Categorías de interés mostradas
-                - Promociones consultadas
-                - Intenciones implícitas basadas en el contexto completo
-                
-                Responde con un JSON que contenga un array de intereses detectados, donde cada interés debe incluir:
-                1. tipo_interes: "producto", "categoria" o "promocion"
-                2. entidad_id: el ID numérico del producto, categoría o promoción
-                3. nivel_interes: un valor entre 0 y 1 que indique el nivel de confianza en el interés basado en toda la conversación
-                4. entidad_nombre: el nombre del producto, categoría o promoción
-                5. contexto: una breve explicación de por qué se detectó este interés
-                
-                Si no se detecta interés, devuelve un array vacío.
-                Ejemplo de formato de respuesta:
-                {{"intereses": [
-                    {{"tipo_interes": "producto", "entidad_id": 5, "nivel_interes": 0.9, "entidad_nombre": "Libro de Python", "contexto": "Cliente preguntó específicamente por libros de programación de Python"}},
-                    {{"tipo_interes": "categoria", "entidad_id": 10, "entidad_nombre": "Tecnología", "nivel_interes": 0.7, "contexto": "Mostró interés general en libros de tecnología"}}
-                ]}}
-                
-                Solo responde con el objeto JSON, sin texto adicional.
-                """
+                prompt = f"""Analiza la siguiente conversación completa entre un cliente y un bot de ventas para detectar intenciones de interés en productos, categorías o promociones.
+    
+    CONVERSACIÓN COMPLETA:
+    {conversation_str}
+    
+    ----------
+    Productos relevantes encontrados:
+    {productos_str}
+    
+    Categorías disponibles:
+    {categorias_str}
+    
+    Promociones activas:
+    {promociones_str}
+    
+    Analiza toda la conversación en conjunto para detectar patrones de interés. Considera:
+    - Productos específicos mencionados o preguntados directamente por el cliente
+    - Categorías de interés mostradas
+    - Promociones consultadas
+    - Intenciones implícitas basadas en el contexto completo
+    
+    Responde con un JSON que contenga un array de intereses detectados, donde cada interés debe incluir:
+    1. tipo_interes: "producto", "categoria" o "promocion"
+    2. entidad_id: el ID numérico del producto, categoría o promoción
+    3. nivel_interes: un valor entre 0 y 1 que indique el nivel de confianza en el interés basado en toda la conversación
+    4. entidad_nombre: el nombre del producto, categoría o promoción
+    5. contexto: una breve explicación de por qué se detectó este interés
+    
+    Si no se detecta interés en el cliente, devuelve un array vacío.
+    Ejemplo de formato de respuesta:
+    {{"intereses": [
+        {{"tipo_interes": "producto", "entidad_id": 5, "nivel_interes": 0.9, "entidad_nombre": "Libro de Python", "contexto": "Cliente preguntó específicamente por libros de programación de Python"}},
+        {{"tipo_interes": "categoria", "entidad_id": 10, "entidad_nombre": "Tecnología", "nivel_interes": 0.7, "contexto": "Mostró interés general en libros de tecnología"}}
+    ]}}
+    
+    Solo responde con el objeto JSON, sin texto adicional."""
                 logger.info(f"prompt: {prompt}")
                 # Llamada a la API de OpenAI
                 response = self.client.chat.completions.create(
@@ -798,15 +931,7 @@ def setup_complete_system():
 def update_product_embeddings():
     """Update product embeddings"""
     print("Updating product embeddings...")
-    
-    db_config = {
-        'host': 'localhost',
-        'database': 'ecommerce',
-        'user': 'your_user',
-        'password': 'your_password'
-    }
-    
-    
+
     try:
         # Extract fresh data
         extractor = DatabaseManager(config.database)

@@ -91,6 +91,7 @@ class EmbeddingGenerator:
                         'descripcion': product.descripcion,
                         'categoria_id': product.categoria_id,
                         'categoria': product.categoria,
+                        'categoria_descripcion': product.categoria_descripcion,
                         'precio_actual': product.precio_actual,
                         'promociones': product.promociones,
                         'imagenes': product.imagenes

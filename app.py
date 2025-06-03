@@ -13,8 +13,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 import urllib.parse
 from database_integration import setup_complete_system, update_product_embeddings
 from config import config
-import cloudinary
-import cloudinary.uploader
+import boto3
 
 load_dotenv()
 
@@ -908,6 +907,8 @@ def send_message():
         if message_text:
             message_params['body'] = message_text
         
+        logger.info(f"message_params: {message_params}")
+
         # Enviar el mensaje
         twilio_message = client.messages.create(**message_params)
         logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
@@ -993,20 +994,19 @@ def send_add_messages():
                     })
                     continue
                 
-                product_info = add_generator.get_product_for_interest(top_interest)
-                logger.info(f"product_info: {product_info}")
+                if(top_interest['tipo_interes'] == 'categoria'):
+                    logger.info("entro en categoria")
+                    ad_image_path = add_generator.create_category_ad(top_interest['entidad_nombre'])
+                elif(top_interest['tipo_interes'] == 'producto'):
+                    logger.info("entro en producto")
+                    ad_image_path = add_generator.create_personalized_ad(top_interest)
+                elif(top_interest['tipo_interes'] == 'promocion'):
+                    logger.info("entro en promocion")
+                    ad_image_path = add_generator.create_promotion_ad(top_interest)
+                else:
+                    logger.warning(f"Tipo de interés desconocido: {top_interest['tipo_interes']}")
+                    ad_image_path = None
 
-                if not product_info:
-                    results['details'].append({
-                        'client': cliente['nombre'],
-                        'phone': cliente['telefono'],
-                        'status': 'skipped',
-                        'reason': 'No matching product found'
-                    })
-                    continue
-                
-                # Create personalized advertisement
-                ad_image_path = add_generator.create_personalized_ad(cliente, product_info)
                 logger.info(f"ad_image_path: {ad_image_path}")
 
                 if not ad_image_path:
@@ -1019,6 +1019,9 @@ def send_add_messages():
                     results['failed_sends'] += 1
                     continue
                 
+                public_url= add_generator.save_aws_ad(ad_image_path)
+                logger.info(f"public_url: {public_url}")
+
                 caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
                 caption += f"Vimos que te interesa {top_interest['entidad_nombre']}. "
                 caption += f"¡Tenemos una oferta especial para ti!\n\n"
@@ -1026,7 +1029,6 @@ def send_add_messages():
                 
                 whatsapp_number = f"whatsapp:{cliente['telefono']}"
         
-                
                 # Enviar mensaje a través de Twilio
                 message_params = {
                     'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
@@ -1039,6 +1041,9 @@ def send_add_messages():
                 logger.info(twilio_message.sid)
 
                 results['successful_sends'] += 1
+
+                limpiado = db_manager.interes_procesado(top_interest['id'])
+                logger.info(f"Interés procesado: {limpiado}")
 
                 # Clean up temporary file
                 try:
