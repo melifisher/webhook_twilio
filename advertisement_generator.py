@@ -927,7 +927,7 @@ class AdvertisementGenerator:
     def save_aws_ad(self, ad_image_path: str) -> str:
         """Save advertisement image to AWS S3"""
         name = ad_image_path.split('\\')[-1]
-        key = f"ads/{name}"
+        key = f"ads/{name.split('/')[-1]}"
         print(f"key: {key}")
         self.s3.upload_file(ad_image_path, 'topicos-ads', key, 
                           ExtraArgs={'ContentType': 'image/png'})
