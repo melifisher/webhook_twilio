@@ -11,6 +11,7 @@ sentence-transformers
 boto3
 reportlab
 Pillow
+urllib3
 gunicorn
 flask-cors
 python-dateutil
