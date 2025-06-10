@@ -13,6 +13,7 @@ import os
 import boto3
 import math
 from pdf_generator import PDFBrochureGenerator
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -378,29 +379,43 @@ class AdvertisementGenerator:
         return img
     
     def load_fonts(self):
-        """Load fonts with fallback"""
-        try:
-            return {
-                'title': ImageFont.truetype("arial.ttf", 42),
-                'subtitle': ImageFont.truetype("arial.ttf", 28),
-                'text': ImageFont.truetype("arial.ttf", 20),
-                'price': ImageFont.truetype("arial.ttf", 36),
-                'discount': ImageFont.truetype("arial.ttf", 48),
-                'small': ImageFont.truetype("arial.ttf", 16),
-                'badge': ImageFont.truetype("arial.ttf", 24)
-            }
-        except:
-            default_font = ImageFont.load_default()
-            return {
-                'title': default_font,
-                'subtitle': default_font,
-                'text': default_font,
-                'price': default_font,
-                'discount': default_font,
-                'small': default_font,
-                'badge': default_font
-            }
-    
+        """Load fonts with proper fallback"""
+        base_dir = Path(__file__).parent
+        fonts_dir = base_dir / "fonts"
+        
+        # Rutas de fuentes por prioridad
+        font_paths = [
+            # Fuentes incluidas en el proyecto
+            str(fonts_dir / "arial.ttf"),
+            str(fonts_dir / "DejaVuSans.ttf"),
+            # Fuentes del sistema Linux
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            # Fuentes del sistema Windows
+            "arial.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+        ]
+        
+        def get_font(size):
+            for font_path in font_paths:
+                try:
+                    return ImageFont.truetype(font_path, size)
+                except (IOError, OSError):
+                    continue
+            
+            # Si nada funciona, crear una fuente default "simulada"
+            return ImageFont.load_default()
+        
+        return {
+            'title': get_font(42),
+            'subtitle': get_font(28),
+            'text': get_font(20),
+            'price': get_font(36),
+            'discount': get_font(48),
+            'small': get_font(16),
+            'badge': get_font(24)
+        }
+        
     def load_product_image(self, product, target_width: int):
         """Load and resize product image maintaining aspect ratio by width"""
         if not product.imagenes or len(product.imagenes) == 0:
@@ -597,7 +612,7 @@ class AdvertisementGenerator:
         # Modern layout with asymmetric design
         if product_img:
             # Image on left side
-            img.paste(product_img, (50, 115), product_img)
+            img.paste(product_img, (50, 100), product_img)
             text_start_x = 450
         else:
             text_start_x = 100
