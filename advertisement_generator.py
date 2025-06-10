@@ -971,26 +971,27 @@ class AdvertisementGenerator:
             public_url = self.pdf_generator.save_pdf_to_aws(pdf_path, client_name)
             
             # Clean up temporary file
-            try:
-                os.unlink(pdf_path)
-            except Exception as e:
-                logger.warning(f"Could not delete temp PDF file: {e}")
+            # try:
+            #     os.unlink(pdf_path)
+            # except Exception as e:
+            #     logger.warning(f"Could not delete temp PDF file: {e}")
             
             # Clean up any other temp files
-            self.pdf_generator.cleanup_temp_files()
+            # self.pdf_generator.cleanup_temp_files()
             
             logger.info(f"PDF brochure created and uploaded successfully: {public_url}")
-            return public_url
+            logger.info(f"pdf_path: {pdf_path}")
+            return public_url, pdf_path
             
         except Exception as e:
             logger.error(f"Error creating PDF brochure for client: {e}")
             return None
     
     # Método actualizado para crear folletos en lugar de imágenes individuales
-    def create_ads_for_client(self, client_name: str, client_interests: List[Dict]) -> Optional[str]:
+    def create_ads_for_client(self, client_name: str, client_interests: List[Dict]):
         """Create PDF brochure instead of individual images"""
         try:
-            public_url = self.create_pdf_brochure_for_client(client_name, client_interests)
+            public_url, pdf_path = self.create_pdf_brochure_for_client(client_name, client_interests)
             
             if public_url:
                 logger.info(f"PDF brochure created successfully for {client_name}: {public_url}")
@@ -1000,7 +1001,7 @@ class AdvertisementGenerator:
                 logger.info(f"intereses_ids: {intereses_ids}")
                 self.db_manager.intereses_procesados(intereses_ids)
 
-                return public_url
+                return public_url, pdf_path
             else:
                 logger.error(f"Failed to create PDF brochure for {client_name}")
                 return None
