@@ -280,9 +280,35 @@ class AdvertisementGenerator:
         
         # Try to load fonts
         try:
-            big_font = ImageFont.truetype("arial.ttf", 48)
-            medium_font = ImageFont.truetype("arial.ttf", 24)
-            small_font = ImageFont.truetype("arial.ttf", 16)
+            base_dir = Path(__file__).parent
+            fonts_dir = base_dir / "fonts"
+            
+            # Rutas de fuentes por prioridad
+            font_paths = [
+                # Fuentes incluidas en el proyecto
+                str(fonts_dir / "arial.ttf"),
+                str(fonts_dir / "DejaVuSans.ttf"),
+                # Fuentes del sistema Linux
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                # Fuentes del sistema Windows
+                "arial.ttf",
+                "C:/Windows/Fonts/arial.ttf",
+            ]
+            
+            def get_font(size):
+                for font_path in font_paths:
+                    try:
+                        return ImageFont.truetype(font_path, size)
+                    except (IOError, OSError):
+                        continue
+                
+                # Si nada funciona, crear una fuente default "simulada"
+                return ImageFont.load_default()
+
+            big_font = get_font( 48)
+            medium_font = get_font(24)
+            small_font = get_font(16)
         except:
             big_font = ImageFont.load_default()
             medium_font = ImageFont.load_default()
