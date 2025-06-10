@@ -1041,7 +1041,7 @@ def create_ad():
             return jsonify({"error": 'No client found with specified interest criteria'}), 500
 
         try:
-            public_url, pdf_path = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
+            public_url = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
             logger.info(f"url en @: {public_url}")
             caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
             caption += f"¡Tenemos una oferta especial para ti!\n\n"
@@ -1060,7 +1060,7 @@ def create_ad():
             logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
             logger.info(twilio_message.sid)
 
-            return pdf_path
+            return public_url
 
         except Exception as e:
             logger.error(f"Error enviando mensaje a {cliente.get('nombre', 'Unknown')}: {e}")
