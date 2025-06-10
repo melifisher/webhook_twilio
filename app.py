@@ -983,7 +983,7 @@ def send_add_messages():
 
         for cliente in clients:
             try:
-                public_url = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
+                public_url, pdf_path = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
                 logger.info(f"url en @: {public_url}")
                 caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
                 caption += f"¡Tenemos una oferta especial para ti!\n\n"
@@ -1031,7 +1031,8 @@ def create_ad():
     """Enviar adds a clientes por WhatsApp"""
     try:
         data = request.json
-        cliente = data.get('client')
+        logger.info(f"data: {data}")
+        cliente = data
         
         logger.info(f"cliente: {cliente}")
 

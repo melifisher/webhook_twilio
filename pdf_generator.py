@@ -120,11 +120,14 @@ class PDFBrochureGenerator:
         """Add decorative elements to each page"""
         try:
             canvas.saveState()
-            
-            # Add header line
-            canvas.setStrokeColor(self.brand_colors['primary'])
-            canvas.setLineWidth(3)
-            canvas.line(15*mm, A4[1] - 15*mm, A4[0] - 15*mm, A4[1] - 15*mm)
+            if doc.page == 1:
+                self._draw_cover_background(canvas)
+
+            # Add header line (skip on cover page)
+            if doc.page > 1:
+                canvas.setStrokeColor(self.brand_colors['primary'])
+                canvas.setLineWidth(3)
+                canvas.line(15*mm, A4[1] - 15*mm, A4[0] - 15*mm, A4[1] - 15*mm)
             
             # Add footer
             canvas.setFont('Helvetica', 8)
@@ -133,12 +136,36 @@ class PDFBrochureGenerator:
             canvas.drawRightString(A4[0] - 15*mm, 10*mm, f"Catálogo Personalizado - {datetime.now().year}")
             
             # Add corner decorations
-            self._add_corner_decorations(canvas)
+            if doc.page > 1:
+                self._add_corner_decorations(canvas)
             
             canvas.restoreState()
         except Exception as e:
             logger.error(f"Error adding page decorations: {e}")
     
+    def _draw_cover_background(self, canvas):
+        """Draw background directly on canvas"""
+        try:
+            # Background gradient effect
+            colors = ['#1a73e8', '#1557b0', '#0f3c78', '#0a2040']
+            rect_height = A4[1] / len(colors)
+            
+            for i, color_hex in enumerate(colors):
+                canvas.setFillColor(HexColor(color_hex))
+                canvas.rect(0, i * rect_height, A4[0], rect_height, fill=1, stroke=0)
+            
+            # Add decorative circles
+            for i in range(5):
+                canvas.setFillColor(HexColor('#ffffff20'))  # Transparent white
+                x = A4[0] * (0.1 + i * 0.2)
+                y = A4[1] * 0.8
+                radius = 20 + i * 10
+                canvas.circle(x, y, radius, fill=1, stroke=0)
+                
+        except Exception as e:
+            logger.error(f"Error drawing cover background: {e}")
+
+
     def _add_corner_decorations(self, canvas):
         """Add decorative corner elements"""
         try:
@@ -157,7 +184,7 @@ class PDFBrochureGenerator:
         story = []
         styles = getSampleStyleSheet()
         
-        story.append(self._create_cover_background())
+        # story.append(self._create_cover_background())
         
         # Custom styles with better typography
         title_style = ParagraphStyle(
@@ -168,7 +195,8 @@ class PDFBrochureGenerator:
             alignment=TA_CENTER,
             textColor=self.brand_colors['white'],
             fontName='Helvetica-Bold',
-            leading=40
+            leading=40,
+            bold=True
         )
         
         subtitle_style = ParagraphStyle(
@@ -197,10 +225,10 @@ class PDFBrochureGenerator:
         )
         
         # Add space from top
-        story.append(Spacer(1, 4*cm))
+        story.append(Spacer(1, 6*cm))
         
         # Main title with emoji
-        story.append(Paragraph("🛍️ CATÁLOGO EXCLUSIVO", title_style))
+        story.append(Paragraph("CATÁLOGO EXCLUSIVO", title_style))
         
         # Subtitle
         story.append(Paragraph("Selección Premium Personalizada", subtitle_style))
@@ -233,7 +261,7 @@ class PDFBrochureGenerator:
         story.append(Paragraph(welcome_text, welcome_style))
         
         # Add feature highlights
-        story.extend(self._create_feature_highlights())
+        # story.extend(self._create_feature_highlights())
         
         # Date with better styling
         date_style = ParagraphStyle(
@@ -468,18 +496,18 @@ class PDFBrochureGenerator:
             alignment=TA_CENTER,
             textColor=self.brand_colors['accent'],
             fontName='Helvetica-Bold',
-            borderWidth=1,
-            borderColor=self.brand_colors['accent'],
-            borderPadding=15,
-            backColor=self.brand_colors['light']
+            # borderWidth=1,
+            # borderColor=self.brand_colors['accent'],
+            # borderPadding=15,
+            # backColor=self.brand_colors['light']
         )
         
         story.append(Paragraph("📚 CATEGORÍAS DE INTERÉS", section_title_style))
-        story.append(Spacer(1, 1*cm))
+        story.append(Spacer(1, 0.3*cm))
         
         for i, categoria in enumerate(categorias):
             if i > 0:
-                story.append(Spacer(1, 2*cm))
+                story.append(Spacer(1, 0.3*cm))
             story.extend(self._create_enhanced_category_page(categoria))
         
         return story
@@ -504,7 +532,7 @@ class PDFBrochureGenerator:
             #     leftIndent=10
             # )
             
-            # category_name = categoria.get('entidad_nombre', 'Categoría')
+            category_name = categoria.get('entidad_nombre', 'Categoría')
             # story.append(Paragraph(f"🏷️ {category_name.upper()}", cat_title_style))
             
             # Get products from this category
@@ -628,19 +656,18 @@ class PDFBrochureGenerator:
             alignment=TA_CENTER,
             textColor=self.brand_colors['secondary'],
             fontName='Helvetica-Bold',
-            borderWidth=2,
-            borderColor=self.brand_colors['secondary'],
-            borderPadding=15,
-            backColor=self.brand_colors['light']
+            # borderWidth=2,
+            # borderColor=self.brand_colors['secondary'],
+            # borderPadding=15,
+            # backColor=self.brand_colors['light']
         )
         
         story.append(Paragraph("🎯 PRODUCTOS RECOMENDADOS", section_title_style))
-        story.append(Spacer(1, 1*cm))
+        story.append(Spacer(1, 0.3*cm))
         
         for i, producto in enumerate(productos):
-            if i > 0:
-                story.append(Spacer(1, 2*cm))
             story.extend(self._create_enhanced_individual_product_page(producto))
+            story.append(Spacer(1, 0.3*cm))
         
         return story
     
@@ -911,11 +938,11 @@ class PDFBrochureGenerator:
         )
         
         story.append(Paragraph("🔥 PROMOCIONES ESPECIALES", section_title_style))
-        story.append(Spacer(1, 1*cm))
+        story.append(Spacer(1, 0.3*cm))
         
         for promocion in promociones:
             story.extend(self._create_promotion_page(promocion))
-            story.append(Spacer(1, 1*cm))
+            story.append(Spacer(1, 0.3*cm))
         
         return story
     
@@ -1006,19 +1033,20 @@ class PDFBrochureGenerator:
         )
         
         story.append(Paragraph("Síguenos en nuestras redes sociales para más ofertas", final_style))
-        
+        story.append(Spacer(1, 0.2*cm))
+
         # Social media
         social_style = ParagraphStyle(
             'SocialStyle',
             parent=styles['Normal'],
-            fontSize=18,
+            fontSize=14,
             spaceAfter=20,
             alignment=TA_CENTER,
             textColor=HexColor('#e67e22'),
             fontName='Helvetica'
         )
         
-        story.append(Paragraph("📱 @librosbo | 📘 /librosbo | 🐦 @librosbo", social_style))
+        story.append(Paragraph("instagram: @librosbo | facebook: /librosbo | twitter: @librosbo", social_style))
         
         return story
     
