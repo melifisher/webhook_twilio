@@ -471,18 +471,24 @@ class DatabaseManager:
         # 🔁 Convertir a lista de diccionarios
         return [dict(zip(column_names, row)) for row in products]
     
-    def interes_procesado(self, interes_id):
+    def intereses_procesados(self, interes_ids: List[int]):
         cursor = self.connection.cursor()
-        cursor.execute("""
-            UPDATE interes
-            SET procesado = TRUE
-            WHERE id = %s
-        """, (interes_id,))
-
-        cursor.close()
-        
-        logger.info(f"Se ha puento en procesado el interes: {interes_id}")
-    
+        try:
+            placeholders = ','.join(['%s'] * len(interes_ids))
+            cursor.execute(f"""
+                UPDATE interes
+                SET procesado = TRUE
+                WHERE id IN ({placeholders})
+            """, interes_ids)
+            affected_rows = cursor.rowcount
+            logger.info(f"Se han puesto en procesado {affected_rows} intereses: {interes_ids}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"Error updating interests: {e}")
+            raise
+        finally:
+            cursor.close()
+            
     def get_product_data(self, product_name: str) -> Optional[ProductInfo]:
         query = """SELECT 
             p.id,

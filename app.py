@@ -1026,6 +1026,50 @@ def send_add_messages():
         logger.error(f"Error al enviar mensaje: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/create_ad', methods=['POST'])
+def create_ad():
+    """Enviar adds a clientes por WhatsApp"""
+    try:
+        data = request.json
+        cliente = data.get('client')
+        
+        logger.info(f"cliente: {cliente}")
+
+        if not cliente:
+            logger.info("No cliente found with specified interest criteria")
+            return jsonify({"error": 'No client found with specified interest criteria'}), 500
+
+        try:
+            public_url = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
+            logger.info(f"url en @: {public_url}")
+            caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
+            caption += f"¡Tenemos una oferta especial para ti!\n\n"
+            caption += f"💝 ¡No te pierdas esta oportunidad!"
+            
+            whatsapp_number = f"whatsapp:{cliente['telefono']}"
+    
+            # Enviar mensaje a través de Twilio
+            message_params = {
+                'from_': f"whatsapp:{TWILIO_PHONE_NUMBER}",
+                'to': whatsapp_number,
+                'body': caption,
+                'media_url': [public_url]
+            }
+            twilio_message = client.messages.create(**message_params)
+            logger.info(f"Mensaje enviado a {whatsapp_number}: {twilio_message.sid}")
+            logger.info(twilio_message.sid)
+
+            return public_url
+
+        except Exception as e:
+            logger.error(f"Error enviando mensaje a {cliente.get('nombre', 'Unknown')}: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    except Exception as e:
+        logger.error(f"Error al enviar mensaje: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/get_client_messages', methods=['GET'])
 def get_client_messages():
     """Obtener todos los mensajes para un cliente específico"""

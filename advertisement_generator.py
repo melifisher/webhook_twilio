@@ -994,6 +994,12 @@ class AdvertisementGenerator:
             
             if public_url:
                 logger.info(f"PDF brochure created successfully for {client_name}: {public_url}")
+
+                intereses_ids = [interest['id'] for interest in client_interests]
+                # intereses_ids_str = ','.join(map(str, intereses_ids))
+                logger.info(f"intereses_ids: {intereses_ids}")
+                self.db_manager.intereses_procesados(intereses_ids)
+
                 return public_url
             else:
                 logger.error(f"Failed to create PDF brochure for {client_name}")
