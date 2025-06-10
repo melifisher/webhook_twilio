@@ -483,6 +483,134 @@ class DatabaseManager:
         
         logger.info(f"Se ha puento en procesado el interes: {interes_id}")
     
+    def get_product_data(self, product_name: str) -> Optional[ProductInfo]:
+        query = """SELECT 
+            p.id,
+            p.nombre,
+            p.descripcion,
+            p.activo,
+            c.id as categoria_id,
+            c.nombre as categoria_nombre,
+            c.descripcion as categoria_descripcion,
+            lp.nombre as lista_precios_nombre,
+            pr.valor as precio_valor,
+            pr.fecha_inicio as precio_fecha_inicio,
+            pr.fecha_fin as precio_fecha_fin
+        FROM producto p
+        LEFT JOIN categoria c ON p.categoria_id = c.id
+        LEFT JOIN precio pr ON p.id = pr.producto_id
+        LEFT JOIN lista_precios lp ON pr.lista_precios_id = lp.id
+        WHERE p.nombre LIKE %s
+        ORDER BY p.id, pr.fecha_inicio DESC;"""
+
+        cursor = self.connection.cursor()
+        cursor.execute(query, (f'%{product_name}%',))
+        results = cursor.fetchall()
+
+        if len(results) == 0:
+            return None
+
+        products_dict = {
+            'id': None,
+            'nombre': '',
+            'descripcion': '',
+            'activo': True,
+            'categoria_id': 0,
+            'categoria': '',
+            'categoria_descripcion': '',
+            'precios': [],
+            'promociones': [],
+            'imagenes': []
+        }
+
+        for row in results:
+            if products_dict['id'] is None:
+                products_dict.update({
+                    'id': row[0],
+                    'nombre': row[1],
+                    'descripcion': row[2] or "",
+                    'activo': row[3],
+                    'categoria_id': row[4] or 0,
+                    'categoria': row[5] or "",
+                    'categoria_descripcion': row[6] or ""
+                })
+            if row[7]:
+                precio_info = {
+                    'lista_precios': row[7],
+                    'valor': float(row[8]) if row[8] else 0,
+                    'fecha_inicio': row[9],
+                    'fecha_fin': row[10]
+                }
+                if precio_info not in products_dict['precios']:
+                    products_dict['precios'].append(precio_info)
+
+        product_id = products_dict['id']
+
+        products_dict['promociones'] = self._get_product_promotions(product_id)
+        products_dict['imagenes'] = self._get_product_images(product_id)
+
+        current_price = 0
+        current_lista = "Sin lista de precios"
+        if products_dict['precios']:
+            current_date = date.today()
+            valid_prices = [p for p in products_dict['precios']
+                            if p['fecha_inicio'] <= current_date and
+                            (p['fecha_fin'] is None or p['fecha_fin'] >= current_date)]
+            selected_price = valid_prices[0] if valid_prices else products_dict['precios'][0]
+            current_price = selected_price['valor']
+            current_lista = selected_price['lista_precios']
+
+        product = ProductInfo(
+            id=products_dict['id'],
+            nombre=products_dict['nombre'],
+            descripcion=products_dict['descripcion'],
+            categoria_id=products_dict['categoria_id'],
+            categoria=products_dict['categoria'],
+            categoria_descripcion=products_dict['categoria_descripcion'],
+            precio_actual=current_price,
+            lista_precios=current_lista,
+            promociones=products_dict['promociones'],
+            imagenes=products_dict['imagenes'],
+            activo=products_dict['activo']
+        )
+
+        cursor.close()
+        return product
+
+    def get_promotion_data(self, promo_id: int) -> Optional[Dict]:
+        query = """ SELECT 
+                pr.id,
+                pr.nombre,
+                pr.descripcion,
+                pr.fecha_inicio,
+                pr.fecha_fin,
+                pp.descuento_porcentaje
+            FROM promocion pr
+            JOIN promo_producto pp ON pr.id = pp.promocion_id
+            WHERE pr.id = %s
+            AND pr.fecha_inicio <= CURRENT_DATE
+            AND (pr.fecha_fin IS NULL OR pr.fecha_fin >= CURRENT_DATE)
+            limit 1;"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(query, (promo_id,))
+            result = cursor.fetchone()
+            logger.info(f"Promotion data for ID {promo_id}: {result}")
+        finally:
+            cursor.close()
+
+        if not result:
+            return None
+
+        return {
+            'id': result[0],
+            'nombre': result[1],
+            'descripcion': result[2] or "",
+            'fecha_inicio': result[3],
+            'fecha_fin': result[4],
+            'descuento_porcentaje': float(result[5]) if result[5] else 0
+        }
+
 
 class ConversationalBot:
     def __init__(self, vector_store, embedding_generator, db_manager=None):

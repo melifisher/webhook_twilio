@@ -12,6 +12,7 @@ import logging
 import os
 import boto3
 import math
+from pdf_generator import PDFBrochureGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,42 @@ class AdvertisementGenerator:
             aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
             aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY']
         )
+        self.pdf_generator = PDFBrochureGenerator(self)
+    
+    #MAIN METHOD
+    # def create_ads_for_client(self, client_name:str, client_interests: Dict):
+    #     try:
+    #         for interest in client_interests:
+    #             if(interest['tipo_interes'] == 'categoria'):
+    #                 logger.info("entro en categoria")
+    #                 ad_image_path = self.create_category_ad(interest['entidad_nombre'])
+    #             elif(interest['tipo_interes'] == 'producto'):
+    #                 logger.info("entro en producto")
+    #                 ad_image_path = self.create_personalized_ad(interest)
+    #             elif(interest['tipo_interes'] == 'promocion'):
+    #                 logger.info("entro en promocion")
+    #                 ad_image_path = self.create_promotion_ad(interest)
+    #             else:
+    #                 logger.warning(f"Tipo de interés desconocido: {interest['tipo_interes']}")
+    #                 ad_image_path = None
+
+    #             logger.info(f"ad_image_path: {ad_image_path}")
+
+    #             if not ad_image_path:
+    #                 logger.info(f"No se pudo crear la imagen de anuncio para el interés: {interest['entidad_nombre']}")
+    #                 continue
             
+    #             public_url= self.save_aws_ad(ad_image_path)
+    #             logger.info(f"public_url: {public_url}")
+
+    #             # Clean up temporary file
+    #             try:
+    #                 os.unlink(ad_image_path)
+    #             except:
+    #                 pass
+    #     except Exception as e:
+    #         logger.error(f"Error creating advertisements for client: {e}")
+                    
     def get_relevant_products(self, query: str, k: int = 3) -> List[Dict]:
         """Get relevant products based on query"""
         response = self.client.embeddings.create(
@@ -288,30 +324,31 @@ class AdvertisementGenerator:
         
         return img
 
-    def get_product_for_interest(self, interest: Dict) -> Optional[Dict]:
+    def get_product_for_interest(self, interest: Dict) -> Optional[ProductInfo]:
         """
         Get product information based on interest
         This assumes you have a way to retrieve ProductInfo objects
         """
         if interest['tipo_interes'] == 'producto':
+            return self.db_manager.get_product_data(interest['entidad_nombre'])
             # Get specific product
-            query_text = f"producto {interest['entidad_nombre']}"
-        elif interest['tipo_interes'] == 'categoria':
-            # Get products from category
-            query_text = f"categoría {interest['entidad_nombre']}"
-        else:  # promocion
-            # Get promotional products
-            query_text = f"promoción {interest['entidad_nombre']}"
+            # query_text = f"producto {interest['entidad_nombre']}"
+        # elif interest['tipo_interes'] == 'categoria':
+        #     # Get products from category
+        #     query_text = f"categoría {interest['entidad_nombre']}"
+        # else:  # promocion
+        #     # Get promotional products
+        #     query_text = f"promoción {interest['entidad_nombre']}"
         
-        logger.info(f"Searching for products related to interest: {query_text}")
+        # logger.info(f"Searching for products related to interest: {query_text}")
         # Use the advertisement generator to find relevant products
-        try:
-            relevant_products = self.get_relevant_products(query_text, k=1)
-            if relevant_products:
-                return relevant_products[0]['metadata']['product_data']
-        except Exception as e:
-            print(f"Error getting relevant products: {e}")
-            logger.error(f"Error getting relevant products for interest {interest['entidad_nombre']}: {e}")
+        # try:
+        #     relevant_products = self.get_relevant_products(query_text, k=1)
+        #     if relevant_products:
+        #         return relevant_products[0]['metadata']['product_data']
+        # except Exception as e:
+        #     print(f"Error getting relevant products: {e}")
+        #     logger.error(f"Error getting relevant products for interest {interest['entidad_nombre']}: {e}")
         
         return None
 
@@ -794,42 +831,34 @@ class AdvertisementGenerator:
                 draw.text((badge_x + (badge_size - badge_text_width) // 2, badge_y + 8), 
                          discount_text, fill='white', font=fonts['small'])
 
-    def get_relevant_products(self, query: str, k: int = 3) -> List[Dict]:
-        """Get relevant products based on query"""
-        response = self.client.embeddings.create(
-            input=query,
-            model=self.embedding_generator.model
-        )
-        query_embedding = response.data[0].embedding
-        results = self.vector_store.search(query_embedding, k)
-        return results
-
     def get_category_products(self, category_name: str, limit: int = 6) -> List[Dict]:
         """Get products from a specific category"""
         try:
-            # Use database manager if available
-            if self.db_manager:
-                products = self.db_manager.get_products_by_category(category_name, limit)
-                return products
-            else:
-                # Fallback to vector search
-                query = f"categoría {category_name}"
-                results = self.get_relevant_products(query, k=limit)
-                return [result['metadata']['product_data'] for result in results]
+            products = self.db_manager.get_products_by_category(category_name, limit)
+            return products
         except Exception as e:
             logger.error(f"Error getting category products: {e}")
             return []
 
+    def get_promotion(self, promo_id: int) -> Optional[Dict]:
+        """Get promotion by id"""
+        try:
+            promotion = self.db_manager.get_promotion_data(promo_id)
+            return promotion
+        except Exception as e:
+            logger.error(f"Error getting promotion: {e}")
+            return None
+
     def create_personalized_ad(self, interest: Dict) -> Optional[str]:
         """Create personalized advertisement image for client"""
         try:
-            product_info = self.get_product_for_interest(interest)
+            product = self.get_product_for_interest(interest)
 
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
             temp_path = temp_file.name
             temp_file.close()
             
-            product = self.dict_to_product_info(product_info)
+            # product = self.dict_to_product_info(product_info)
             
             # Choose ad type based on promotions
             if product.promociones and len(product.promociones) > 0:
@@ -881,27 +910,18 @@ class AdvertisementGenerator:
     def create_promotion_ad(self, interest: Dict) -> Optional[str]:
         """Create personalized advertisement image for client"""
         try:
-            product_info = self.get_product_for_interest(interest)
-
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
             temp_path = temp_file.name
             temp_file.close()
             
-            product = self.dict_to_product_info(product_info)
-            if product.promociones and len(product.promociones) > 0:
-                logger.info(f"producto promociones: {product.promociones[0]}")
+            promocion = self.get_promotion(interest['entidad_id'])
+            if promocion:
+                logger.info(f"producto promociones: {promocion}")
                 self.create_simple_promotion_banner(
-                    promotion_info=product.promociones[0],
+                    promotion_info=promocion,
                     output_path=temp_path
                 )
-            else:
-                self.create_regular_product_ad(
-                    product=product,
-                    output_path=temp_path,
-                    width=800,
-                    height=600
-                )
-            
+           
             return temp_path
             
         except Exception as e:
@@ -935,4 +955,50 @@ class AdvertisementGenerator:
         public_url = f"https://topicos-ads.s3.us-east-1.amazonaws.com/{key}"
         return public_url
 
-
+    def create_pdf_brochure_for_client(self, client_name: str, client_interests: List[Dict]) -> Optional[str]:
+        """Create and upload PDF brochure for client"""
+        try:
+            logger.info(f"Creating PDF brochure for client: {client_name}")
+            
+            # Create PDF brochure
+            pdf_path = self.pdf_generator.create_brochure_for_client(client_name, client_interests)
+            
+            if not pdf_path:
+                logger.error("Failed to create PDF brochure")
+                return None
+            
+            # Upload to AWS
+            public_url = self.pdf_generator.save_pdf_to_aws(pdf_path, client_name)
+            
+            # Clean up temporary file
+            try:
+                os.unlink(pdf_path)
+            except Exception as e:
+                logger.warning(f"Could not delete temp PDF file: {e}")
+            
+            # Clean up any other temp files
+            self.pdf_generator.cleanup_temp_files()
+            
+            logger.info(f"PDF brochure created and uploaded successfully: {public_url}")
+            return public_url
+            
+        except Exception as e:
+            logger.error(f"Error creating PDF brochure for client: {e}")
+            return None
+    
+    # Método actualizado para crear folletos en lugar de imágenes individuales
+    def create_ads_for_client(self, client_name: str, client_interests: List[Dict]) -> Optional[str]:
+        """Create PDF brochure instead of individual images"""
+        try:
+            public_url = self.create_pdf_brochure_for_client(client_name, client_interests)
+            
+            if public_url:
+                logger.info(f"PDF brochure created successfully for {client_name}: {public_url}")
+                return public_url
+            else:
+                logger.error(f"Failed to create PDF brochure for {client_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creating advertisements for client: {e}")
+            return None

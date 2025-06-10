@@ -961,7 +961,7 @@ def send_add_messages():
     try:
         clients = db_manager.get_clients_with_interests(
             min_interest_level=0.6,
-            days_back=10
+            days_back=50
         )
 
         logger.info(f"clients: {clients}")
@@ -983,47 +983,9 @@ def send_add_messages():
 
         for cliente in clients:
             try:
-                top_interest = cliente['interests'][0] if cliente['interests'] else None
-                logger.info(f"top_interest: {top_interest}")
-                if not top_interest:
-                    results['details'].append({
-                        'client': cliente['nombre'],
-                        'phone': cliente['telefono'],
-                        'status': 'skipped',
-                        'reason': 'No interests found'
-                    })
-                    continue
-                
-                if(top_interest['tipo_interes'] == 'categoria'):
-                    logger.info("entro en categoria")
-                    ad_image_path = add_generator.create_category_ad(top_interest['entidad_nombre'])
-                elif(top_interest['tipo_interes'] == 'producto'):
-                    logger.info("entro en producto")
-                    ad_image_path = add_generator.create_personalized_ad(top_interest)
-                elif(top_interest['tipo_interes'] == 'promocion'):
-                    logger.info("entro en promocion")
-                    ad_image_path = add_generator.create_promotion_ad(top_interest)
-                else:
-                    logger.warning(f"Tipo de interés desconocido: {top_interest['tipo_interes']}")
-                    ad_image_path = None
-
-                logger.info(f"ad_image_path: {ad_image_path}")
-
-                if not ad_image_path:
-                    results['details'].append({
-                        'client': cliente['nombre'],
-                        'phone': cliente['telefono'],
-                        'status': 'failed',
-                        'reason': 'Failed to create advertisement'
-                    })
-                    results['failed_sends'] += 1
-                    continue
-                
-                public_url= add_generator.save_aws_ad(ad_image_path)
-                logger.info(f"public_url: {public_url}")
-
+                public_url = add_generator.create_ads_for_client(cliente['nombre'], cliente['interests'])
+                logger.info(f"url en @: {public_url}")
                 caption = f"¡Hola {cliente['nombre']}! 🎉\n\n"
-                caption += f"Vimos que te interesa {top_interest['entidad_nombre']}. "
                 caption += f"¡Tenemos una oferta especial para ti!\n\n"
                 caption += f"💝 ¡No te pierdas esta oportunidad!"
                 
@@ -1042,14 +1004,6 @@ def send_add_messages():
 
                 results['successful_sends'] += 1
 
-                limpiado = db_manager.interes_procesado(top_interest['id'])
-                logger.info(f"Interés procesado: {limpiado}")
-
-                # Clean up temporary file
-                try:
-                    os.unlink(ad_image_path)
-                except:
-                    pass
             except Exception as e:
                 logger.error(f"Error enviando mensaje a {cliente.get('nombre', 'Unknown')}: {e}")
                 results['failed_sends'] += 1
@@ -1187,45 +1141,10 @@ def get_clients_with_interests():
     con filtros opcionales de tiempo y nivel de interés
     """
     try:
-        # Parámetros opcionales
-        days = request.args.get('days', '30')  # Por defecto, último mes
-        min_interest = request.args.get('min_interest', '0.6')  # Nivel mínimo de interés
-        
-        try:
-            days = int(days)
-            min_interest = float(min_interest)
-        except ValueError:
-            return jsonify({"error": "Los parámetros 'days' y 'min_interest' deben ser numéricos"}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        
-        # Obtener clientes con intereses significativos en el período especificado
-        cursor.execute("""
-            SELECT DISTINCT c.id, c.telefono, c.nombre, c.correo,
-                   MAX(i.nivel_interes) as max_interes,
-                   COUNT(DISTINCT i.id) as total_intereses
-            FROM cliente c
-            JOIN interes i ON c.id = i.cliente_id
-            WHERE i.fecha_interes >= NOW() - INTERVAL '%s days'
-            AND i.nivel_interes >= %s
-            GROUP BY c.id, c.telefono, c.nombre, c.correo
-            ORDER BY max_interes DESC, total_intereses DESC
-        """, (days, min_interest))
-        
-        clients = []
-        for row in cursor.fetchall():
-            clients.append({
-                "id": row['id'],
-                "phone": row['telefono'],
-                "name": row['nombre'],
-                "email": row['correo'],
-                "max_interest_level": float(row['max_interes']),
-                "total_interests": row['total_intereses']
-            })
-        
-        cursor.close()
-        conn.close()
+        clients = db_manager.get_clients_with_interests(
+            min_interest_level=0.6,
+            days_back=10
+        )
         
         return clients
     

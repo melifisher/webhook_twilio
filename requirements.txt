@@ -10,3 +10,5 @@ faiss-cpu
 sentence-transformers
 flask
 boto3
+reportlab
+Pillow
