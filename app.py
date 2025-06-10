@@ -1190,7 +1190,7 @@ def get_clients_with_interests():
             min_interest_level=0.6,
             days_back=10
         )
-        
+        logger.info(f"clients: {clients}")
         return clients
     
     except Exception as e:
