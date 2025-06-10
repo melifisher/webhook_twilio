@@ -401,25 +401,37 @@ class AdvertisementGenerator:
                 'badge': default_font
             }
     
-    def load_product_image(self, product, target_size=(300, 300)):
-        """Load and resize product image"""
+    def load_product_image(self, product, target_width: int):
+        """Load and resize product image maintaining aspect ratio by width"""
         if not product.imagenes or len(product.imagenes) == 0:
             return None
-        
+
         try:
+            # Cargar imagen desde URL o ruta local
             if product.imagenes[0]["url"].startswith('http'):
                 response = requests.get(product.imagenes[0]["url"])
                 img = Image.open(BytesIO(response.content))
             else:
                 img = Image.open(product.imagenes[0]["url"])
-            
-            # Convert to RGBA for transparency support
+
+            # Convertir a RGBA
             img = img.convert('RGBA')
-            img = img.resize(target_size, Image.Resampling.LANCZOS)
+
+            # Obtener tamaño original asegurando enteros
+            original_width, original_height = map(int, img.size)
+
+            # Calcular nuevo alto proporcional
+            aspect_ratio = original_height / original_width
+            target_height = int(target_width * aspect_ratio)
+
+            # Redimensionar manteniendo proporción
+            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
             return img
+
         except Exception as e:
             print(f"Could not load product image: {e}")
             return None
+
     
     def create_promotional_product_ad(self, product: ProductInfo, 
                                     output_path: str = None,
@@ -443,7 +455,7 @@ class AdvertisementGenerator:
         fonts = self.load_fonts()
         
         # Load product image
-        product_img = self.load_product_image(product, (280, 280))
+        product_img = self.load_product_image(product, 280)
         
         # Create main content area with rounded rectangle
         content_x, content_y = 50, 80
@@ -462,7 +474,7 @@ class AdvertisementGenerator:
         # Position product image on the right
         if product_img:
             img_x = content_x + content_width - 300
-            img_y = content_y + 40
+            img_y = content_y + 30
             img.paste(product_img, (img_x, img_y), product_img)
         
         # Left side content
@@ -580,12 +592,12 @@ class AdvertisementGenerator:
         fonts = self.load_fonts()
         
         # Load product image
-        product_img = self.load_product_image(product, (350, 350))
+        product_img = self.load_product_image(product, 350)
         
         # Modern layout with asymmetric design
         if product_img:
             # Image on left side
-            img.paste(product_img, (50, 125), product_img)
+            img.paste(product_img, (50, 115), product_img)
             text_start_x = 450
         else:
             text_start_x = 100
