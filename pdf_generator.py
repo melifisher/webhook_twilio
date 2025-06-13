@@ -84,20 +84,14 @@ class PDFBrochureGenerator:
             # story.extend(self._create_table_of_contents(categorias, productos, promociones))
             # story.append(PageBreak())
             
-            # Add product sections
             if productos:
                 story.extend(self._create_enhanced_product_section(productos))
-                # story.append(PageBreak())
             
-            # Add promotion sections
             if promociones:
                 story.extend(self._create_promotion_section(promociones))
-                # story.append(PageBreak())
-            
-            # Add category sections
+
             if categorias:
-                story.extend(self._create_enhanced_category_section(categorias))
-                # story.append(PageBreak())
+                story.extend(self._create_category_section(categorias))
             
             # Add back page
             story.append(PageBreak())
@@ -485,7 +479,7 @@ class PDFBrochureGenerator:
         </para>
         """
     
-    def _create_enhanced_category_section(self, categorias: List[Dict]) -> List:
+    def _create_category_section(self, categorias: List[Dict]) -> List:
         """Create enhanced category section with better layout"""
         story = []
         
@@ -768,102 +762,6 @@ class PDFBrochureGenerator:
             logger.warning(f"Could not convert dict to product info: {e}")
             return None
 
-    def _create_category_section(self, categorias: List[Dict]) -> List:
-        """Create category section with products"""
-        story = []
-        styles = getSampleStyleSheet()
-        
-        section_title_style = ParagraphStyle(
-            'SectionTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            spaceAfter=20,
-            alignment=TA_CENTER,
-            textColor=HexColor('#e74c3c'),
-            fontName='Helvetica-Bold'
-        )
-        
-        story.append(Paragraph("📚 CATEGORÍAS DE INTERÉS", section_title_style))
-        story.append(Spacer(1, 1*cm))
-        
-        for categoria in categorias:
-            story.extend(self._create_category_page(categoria))
-            story.append(Spacer(1, 1.5*cm))
-        
-        return story
-    
-    def _create_category_page(self, categoria: Dict) -> List:
-        """Create a page for a specific category"""
-        story = []
-        styles = getSampleStyleSheet()
-        
-        # Category title
-        cat_title_style = ParagraphStyle(
-            'CategoryTitle',
-            parent=styles['Heading2'],
-            fontSize=20,
-            spaceAfter=15,
-            alignment=TA_LEFT,
-            textColor=HexColor('#2980b9'),
-            fontName='Helvetica-Bold',
-            borderWidth=1,
-            borderColor=HexColor('#2980b9'),
-            borderPadding=10,
-            backColor=HexColor('#ecf0f1')
-        )
-        
-        story.append(Paragraph(f"🏷️ {categoria['entidad_nombre'].upper()}", cat_title_style))
-        
-        # Get products from this category
-        try:
-            products = self.ad_generator.get_category_products(categoria['entidad_nombre'], limit=4)
-            
-            if products:
-                # Create products grid
-                products_data = []
-                for i in range(0, len(products), 2):  # 2 products per row
-                    row_products = products[i:i+2]
-                    row_data = []
-                    
-                    for product in row_products:
-                        product_cell = self._create_product_cell(product)
-                        row_data.append(product_cell)
-                    
-                    # Fill empty cell if odd number of products
-                    if len(row_data) == 1:
-                        row_data.append("")
-                    
-                    products_data.append(row_data)
-                
-                # Create table
-                if products_data:
-                    products_table = Table(products_data, colWidths=[9*cm, 9*cm])
-                    products_table.setStyle(TableStyle([
-                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-                        ('TOPPADDING', (0, 0), (-1, -1), 12),
-                        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-                    ]))
-                    
-                    story.append(products_table)
-            else:
-                # No products message
-                no_products_style = ParagraphStyle(
-                    'NoProducts',
-                    parent=styles['Normal'],
-                    fontSize=14,
-                    alignment=TA_CENTER,
-                    textColor=HexColor('#7f8c8d'),
-                    fontName='Helvetica-Oblique'
-                )
-                story.append(Paragraph("Próximamente nuevos productos en esta categoría...", no_products_style))
-                
-        except Exception as e:
-            logger.error(f"Error getting products for category {categoria['entidad_nombre']}: {e}")
-        
-        return story
-    
     def _create_product_section(self, productos: List[Dict]) -> List:
         """Create products section"""
         story = []
@@ -1049,34 +947,7 @@ class PDFBrochureGenerator:
         story.append(Paragraph("instagram: @librosbo | facebook: /librosbo | twitter: @librosbo", social_style))
         
         return story
-    
-    def _create_product_cell(self, product: Dict) -> str:
-        """Create product cell content for table"""
-        try:
-            name = product.get('nombre', 'Producto')[:40] + ("..." if len(product.get('nombre', '')) > 40 else "")
-            price = product.get('precio_actual', 0)
-            category = product.get('categoria', 'Sin categoría')
-            
-            # Check for promotions
-            promo_text = ""
-            if product.get('promociones'):
-                promo = product['promociones'][0]
-                if 'descuento_porcentaje' in promo:
-                    promo_text = f"<br/><font color='red'><b>🏷️ {promo['descuento_porcentaje']}% OFF</b></font>"
-            
-            cell_content = f"""
-            <b>{name}</b><br/>
-            <font color='blue'>{category}</font><br/>
-            <font color='green' size='14'><b>${price:,.2f}</b></font>
-            {promo_text}
-            """
-            
-            return cell_content
-            
-        except Exception as e:
-            logger.error(f"Error creating product cell: {e}")
-            return "Producto no disponible"
-    
+
     def _get_product_image_cell(self, product) -> str:
         """Get product image for table cell"""
         try:
@@ -1172,19 +1043,18 @@ class PDFBrochureGenerator:
             buffer.seek(0)
 
             # Medidas máximas del frame
-            max_width = A4[0] - 30 * mm  # 498.23 pt
-            max_height = A4[1] - 40 * mm  # 716.50 pt
+            max_width = A4[0] - 30 * mm  # 498.23
+            max_height = A4[1] - 40 * mm  # 716.50
 
             # Tamaño original de la imagen en píxeles
             img_width_px, img_height_px = ad_image.size
 
-            # DPI seguro
             dpi_info = ad_image.info.get('dpi', (72, 72))
             if len(dpi_info) < 2:
                 dpi_info = (dpi_info[0], dpi_info[0])  # Repetir si solo hay uno
             dpi_x, dpi_y = dpi_info
 
-            # Convertir a puntos (asumiendo 72 dpi)
+            # Convertir a puntos
             img_width_pt = img_width_px * 72 / dpi_x
             img_height_pt = img_height_px * 72 / dpi_y
 

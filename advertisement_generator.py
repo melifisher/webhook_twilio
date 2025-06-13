@@ -101,7 +101,6 @@ class AdvertisementGenerator:
         img = Image.new('RGB', (width, height), background_color)
         draw = ImageDraw.Draw(img)
         
-        # Try to load fonts (fallback to default if not available)
         try:
             title_font = ImageFont.truetype("arial.ttf", 36)
             subtitle_font = ImageFont.truetype("arial.ttf", 24)
@@ -409,9 +408,7 @@ class AdvertisementGenerator:
         base_dir = Path(__file__).parent
         fonts_dir = base_dir / "fonts"
         
-        # Rutas de fuentes por prioridad
         font_paths = [
-            # Fuentes incluidas en el proyecto
             str(fonts_dir / "arial.ttf"),
             str(fonts_dir / "DejaVuSans.ttf"),
             # Fuentes del sistema Linux
@@ -429,7 +426,6 @@ class AdvertisementGenerator:
                 except (IOError, OSError):
                     continue
             
-            # Si nada funciona, crear una fuente default "simulada"
             return ImageFont.load_default()
         
         return {
@@ -480,10 +476,8 @@ class AdvertisementGenerator:
                                     height: int = 700) -> Image.Image:
         """Create attractive promotional advertisement for products with promotions"""
         
-        # Create gradient background
         img = self.create_gradient_background(width, height, '#667eea', '#764ba2')
         
-        # Add subtle pattern overlay
         overlay = Image.new('RGBA', (width, height), (255, 255, 255, 20))
         for i in range(0, width, 50):
             for j in range(0, height, 50):
@@ -498,11 +492,9 @@ class AdvertisementGenerator:
         # Load product image
         product_img = self.load_product_image(product, 280)
         
-        # Create main content area with rounded rectangle
         content_x, content_y = 50, 80
         content_width, content_height = width - 100, height - 160
         
-        # Draw white content background with shadow
         shadow_offset = 8
         draw.rounded_rectangle([content_x + shadow_offset, content_y + shadow_offset, 
                               content_x + content_width + shadow_offset, 
@@ -518,11 +510,9 @@ class AdvertisementGenerator:
             img_y = content_y + 30
             img.paste(product_img, (img_x, img_y), product_img)
         
-        # Left side content
         left_x = content_x + 40
         current_y = content_y + 40
         
-        # Promotional badge
         if product.promociones:
             promo = product.promociones[0]
             if 'descuento_porcentaje' in promo and promo['descuento_porcentaje']:
@@ -531,7 +521,6 @@ class AdvertisementGenerator:
                 badge_x = left_x
                 badge_y = current_y
                 
-                # Badge shadow
                 draw.ellipse([badge_x + 4, badge_y + 4, badge_x + badge_size + 4, 
                             badge_y + badge_size + 4], fill=(0, 0, 0, 40))
                 
@@ -555,14 +544,12 @@ class AdvertisementGenerator:
                 
                 current_y += badge_size + 20
         
-        # Product title
         title_text = product.nombre.upper()
         wrapped_title = textwrap.fill(title_text, width=25)
         draw.multiline_text((left_x, current_y), wrapped_title, 
                           fill='#2c3e50', font=fonts['title'])
         current_y += len(wrapped_title.split('\n')) * 50 + 20
         
-        # Category with icon-like background
         cat_bg_width = 200
         cat_bg_height = 35
         draw.rounded_rectangle([left_x, current_y, left_x + cat_bg_width, 
@@ -574,7 +561,6 @@ class AdvertisementGenerator:
                  fill='white', font=fonts['text'])
         current_y += cat_bg_height + 25
         
-        # Description
         if product.descripcion:
             desc_lines = textwrap.fill(product.descripcion, width=35).split('\n')
             for line in desc_lines[:3]:
@@ -582,7 +568,6 @@ class AdvertisementGenerator:
                 current_y += 25
             current_y += 15
         
-        # Price section
         price_bg_height = 60
         draw.rounded_rectangle([left_x, current_y, left_x + 250, 
                               current_y + price_bg_height], 
@@ -592,7 +577,6 @@ class AdvertisementGenerator:
         draw.text((left_x + 15, current_y + 15), price_text, 
                  fill='white', font=fonts['price'])
         
-        # Promotion details at bottom
         if product.promociones:
             promo = product.promociones[0]
             promo_y = content_y + content_height - 80
@@ -627,15 +611,12 @@ class AdvertisementGenerator:
                                 height: int = 600) -> Image.Image:
         """Create elegant advertisement for products without promotions"""
         
-        # Create subtle gradient background
         img = self.create_gradient_background(width, height, '#f8f9fa', '#e9ecef')
         draw = ImageDraw.Draw(img)
         fonts = self.load_fonts()
         
-        # Load product image
         product_img = self.load_product_image(product, 350)
         
-        # Modern layout with asymmetric design
         if product_img:
             # Image on left side
             img.paste(product_img, (50, 100), product_img)
@@ -643,22 +624,16 @@ class AdvertisementGenerator:
         else:
             text_start_x = 100
         
-        # Title with modern typography
         current_y = 80
-        title_text = product.nombre
-        
-        # Create title background bar
+    
         title_bbox = draw.textbbox((0, 0), title_text, font=fonts['title'])
         title_width = title_bbox[2] - title_bbox[0]
-        title_height = title_bbox[3] - title_bbox[1]
-        
-        # Background bar for title
+    
         draw.rectangle([text_start_x - 20, current_y - 10, 
                        text_start_x + min(title_width + 40, width - text_start_x), 
                        current_y + title_height + 10], 
                       fill='#2c3e50')
         
-        # Wrap title if needed
         if title_width > (width - text_start_x - 40):
             wrapped_title = textwrap.fill(title_text, width=20)
             draw.multiline_text((text_start_x, current_y), wrapped_title, 
@@ -668,7 +643,6 @@ class AdvertisementGenerator:
             draw.text((text_start_x, current_y), title_text, fill='white', font=fonts['title'])
             current_y += 60
         
-        # Category with elegant styling
         category_text = product.categoria.upper()
         draw.text((text_start_x, current_y), category_text, 
                  fill='#3498db', font=fonts['subtitle'])
@@ -680,7 +654,6 @@ class AdvertisementGenerator:
                  fill='#3498db', width=3)
         current_y += 60
         
-        # Description with better formatting
         if product.descripcion:
             desc_lines = textwrap.fill(product.descripcion, width=30).split('\n')
             for line in desc_lines[:4]:
@@ -700,7 +673,6 @@ class AdvertisementGenerator:
         
         draw.text((text_start_x + 5, current_y), price_text, fill='white', font=fonts['price'])
         
-        # Quality badge
         badge_text = "CALIDAD PREMIUM"
         badge_x = width - 200
         badge_y = height - 80
@@ -713,7 +685,7 @@ class AdvertisementGenerator:
         draw.text((badge_x + (180 - badge_width) // 2, badge_y + 12), 
                  badge_text, fill='white', font=fonts['small'])
         
-        # Minimalist border
+        # borde
         draw.rectangle([10, 10, width-10, height-10], outline='#bdc3c7', width=2)
         
         if output_path:
@@ -913,7 +885,6 @@ class AdvertisementGenerator:
             
             # product = self.dict_to_product_info(product_info)
             
-            # Choose ad type based on promotions
             if product.promociones and len(product.promociones) > 0:
                 self.create_promotional_product_ad(
                     product=product,
@@ -1040,7 +1011,6 @@ class AdvertisementGenerator:
             logger.error(f"Error creating PDF brochure for client: {e}")
             return None
     
-    # Método actualizado para crear folletos en lugar de imágenes individuales
     def create_ads_for_client(self, client_name: str, client_interests: List[Dict]) -> Optional[str]:
         """Create PDF brochure instead of individual images"""
         try:

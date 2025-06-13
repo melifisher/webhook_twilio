@@ -207,6 +207,30 @@ class DatabaseManager:
         cursor.close()
         logger.info(f"Message saved: {tipo}, is_bot: {is_bot}, conversation_id: {conversation_id}")
 
+    def get_all_clients(self) -> List[Dict]:
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT c.*, COUNT(m.id) as conversation_count 
+            FROM cliente c
+            LEFT JOIN conversacion m ON c.id = m.cliente_id
+            GROUP BY c.id
+            ORDER BY c.fecha_creacion DESC
+        """)
+        results = cursor.fetchall()
+        cursor.close()
+        clients = []
+        for row in results:
+            clients.append({
+                "id": row['id'],
+                "phone": row['telefono'],
+                "name": row['nombre'],
+                "email": row['correo'],
+                "created_at": row['fecha_creacion'].isoformat() if row['fecha_creacion'] else None,
+                "conversation_count": row['conversation_count']
+            })
+
+        return clients
+
     def get_conversation_history(self, conversation_id: int, limit: int = 20) -> List[Dict]:
         cursor = self.connection.cursor()
         cursor.execute("""
